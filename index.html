@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vikrama Kulapati - Cloud System</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Html2Canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- FIREBASE SDK (Updated to 11.6.1 for stability) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getFirestore, collection, addDoc, onSnapshot, 
+            doc, deleteDoc, updateDoc, query, orderBy, serverTimestamp,
+            getDocs, where 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // IMPORT AUTHENTICATION (PENTING UNTUK FIX PERMISSION ERROR)
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // CONFIG FIREBASE
+        const firebaseConfig = {
+            apiKey: "AIzaSyBEUcDePQLhs3SYbsFSTyK-g0gP_7YwUms",
+            authDomain: "cartelinventory.firebaseapp.com",
+            projectId: "cartelinventory",
+            storageBucket: "cartelinventory.firebasestorage.app",
+            messagingSenderId: "168105589094",
+            appId: "1:168105589094:web:aee3dc7232c7246b5570a7"
+        };
+
+        // Inisialisasi Variables
+        let db;
+        let auth;
+        let currentUser = null;
+
+        // DOM Elements
+        const statusEl = document.getElementById('date'); 
+        const tableBody = document.getElementById('inventoryTable');
+        const historyContainer = document.getElementById('reportHistoryContainer');
+        const emptyTable = document.getElementById('emptyTableState');
+        const emptyReport = document.getElementById('emptyReportState');
+        const totalLabel = document.getElementById('totalItems');
+        const datalist = document.getElementById('itemList');
+        const form = document.getElementById('inventoryForm');
+        const errorBanner = document.getElementById('errorBanner');
+
+        // Modal Elements
+        const modalBackdrop = document.getElementById('modalBackdrop');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalIcon = document.getElementById('modalIcon');
+        const modalInputContainer = document.getElementById('modalInputContainer');
+        const modalInput = document.getElementById('modalInput');
+        const btnModalCancel = document.getElementById('btnModalCancel');
+        const btnModalConfirm = document.getElementById('btnModalConfirm');
+
+        // State Global untuk Modal Callback
+        let modalConfirmCallback = null;
+
+        // === 1. SYSTEM INITIALIZATION ===
+        async function initSystem() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                statusEl.innerText = "Authenticating...";
+                statusEl.className = "text-xs text-yellow-500 font-bold uppercase animate-pulse";
+
+                await signInAnonymously(auth);
+
+            } catch (e) {
+                console.error("Init Error:", e);
+                if (e.code === 'auth/configuration-not-found' || e.code === 'auth/operation-not-allowed') {
+                    showError("⚠️ SETUP DIPERLUKAN: Authentication belum aktif. Buka Firebase Console > Authentication > Sign-in method > Aktifkan 'Anonymous'.");
+                    statusEl.innerText = "AUTH FAILED";
+                    statusEl.className = "text-xs text-red-500 font-bold uppercase";
+                } else {
+                    showError("Gagal Inisialisasi: " + e.message);
+                }
+            }
+        }
+
+        // === 2. AUTH STATE LISTENER ===
+        initSystem().then(() => {
+            if (auth) {
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUser = user;
+                        statusEl.innerText = "SYSTEM ONLINE";
+                        statusEl.className = "text-xs text-green-500 font-bold uppercase";
+                        console.log("User Logged In:", user.uid);
+                        hideError(); 
+                        startDatabaseListeners();
+                    } else {
+                        statusEl.innerText = "DISCONNECTED";
+                        statusEl.className = "text-xs text-red-500 font-bold uppercase";
+                    }
+                });
+            }
+        });
+
+        // === 3. DATABASE LISTENERS ===
+        function startDatabaseListeners() {
+            if (!db) return;
+
+            // A. Listener Items
+            const qItems = query(collection(db, "items"), orderBy("name"));
+            onSnapshot(qItems, (snapshot) => {
+                tableBody.innerHTML = '';
+                datalist.innerHTML = '';
+                let count = 0;
+
+                if (snapshot.empty) {
+                    emptyTable.style.display = 'flex';
+                } else {
+                    emptyTable.style.display = 'none';
+                    snapshot.forEach((docSnap) => {
+                        const item = docSnap.data();
+                        renderRow(docSnap.id, item);
+                        renderOption(item.name);
+                        count++;
+                    });
+                }
+                totalLabel.innerText = count;
+            }, (error) => {
+                if (error.code === 'permission-denied') {
+                    showError("⛔ AKSES DITOLAK: Security Rules Firebase memblokir akses.");
+                } else {
+                    showError("DB Error: " + error.message);
+                }
+            });
+
+            // B. Listener Logs
+            const qLogs = query(collection(db, "logs"), orderBy("timestamp", "desc"));
+            onSnapshot(qLogs, (snapshot) => {
+                historyContainer.innerHTML = ''; 
+                if (snapshot.empty) {
+                    emptyReport.style.display = 'block';
+                } else {
+                    emptyReport.style.display = 'none';
+                    snapshot.forEach((docSnap) => {
+                        renderLogCard(docSnap.id, docSnap.data());
+                    });
+                }
+            });
+        }
+
+        // === 4. MODAL SYSTEM (REPLACEMENT FOR ALERT/CONFIRM) ===
+        
+        window.showModal = function({ type, title, message, useInput, onConfirm }) {
+            // Reset State
+            modalInput.value = '';
+            modalInputContainer.classList.add('hidden');
+            btnModalCancel.classList.add('hidden');
+            btnModalConfirm.classList.remove('bg-red-600', 'hover:bg-red-700', 'bg-cartel-gold', 'hover:bg-yellow-500');
+            modalIcon.className = 'text-4xl text-center mb-4';
+            
+            // Set Content
+            modalTitle.innerText = title;
+            modalMessage.innerText = message;
+            modalConfirmCallback = onConfirm;
+
+            // Configure based on Type
+            if (type === 'error') {
+                modalIcon.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i>';
+                modalIcon.classList.add('text-red-500');
+                btnModalConfirm.innerText = "Tutup";
+                btnModalConfirm.classList.add('bg-gray-700', 'hover:bg-gray-600', 'text-white');
+            } else if (type === 'success') {
+                modalIcon.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
+                modalIcon.classList.add('text-green-500');
+                btnModalConfirm.innerText = "OK";
+                btnModalConfirm.classList.add('bg-cartel-gold', 'text-black', 'hover:bg-yellow-500');
+            } else if (type === 'confirm' || type === 'delete') {
+                modalIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
+                modalIcon.classList.add(type === 'delete' ? 'text-red-500' : 'text-cartel-gold');
+                
+                btnModalCancel.classList.remove('hidden');
+                btnModalConfirm.innerText = type === 'delete' ? "Musnahkan" : "Ya, Lanjutkan";
+                
+                if (type === 'delete') {
+                    btnModalConfirm.classList.add('bg-red-600', 'text-white', 'hover:bg-red-700');
+                } else {
+                    btnModalConfirm.classList.add('bg-cartel-gold', 'text-black', 'hover:bg-yellow-500');
+                }
+
+                if (useInput) {
+                    modalInputContainer.classList.remove('hidden');
+                    // Auto focus input when modal shows
+                    setTimeout(() => modalInput.focus(), 100);
+                }
+            }
+
+            // Show Modal
+            modalBackdrop.classList.remove('hidden');
+            // Small delay for transition effect
+            setTimeout(() => {
+                modalBackdrop.classList.remove('opacity-0');
+                document.getElementById('modalCard').classList.remove('scale-95');
+                document.getElementById('modalCard').classList.add('scale-100');
+            }, 10);
+        }
+
+        window.closeModal = function() {
+            modalBackdrop.classList.add('opacity-0');
+            document.getElementById('modalCard').classList.remove('scale-100');
+            document.getElementById('modalCard').classList.add('scale-95');
+            setTimeout(() => {
+                modalBackdrop.classList.add('hidden');
+            }, 300);
+            modalConfirmCallback = null;
+        }
+
+        // Event Listeners for Modal Buttons
+        btnModalCancel.addEventListener('click', closeModal);
+        
+        btnModalConfirm.addEventListener('click', () => {
+            if (modalConfirmCallback) {
+                // If input is visible, pass the value
+                if (!modalInputContainer.classList.contains('hidden')) {
+                    const val = modalInput.value.trim();
+                    if (!val) {
+                        // Shake effect for empty input
+                        modalInput.classList.add('ring-2', 'ring-red-500');
+                        setTimeout(() => modalInput.classList.remove('ring-2', 'ring-red-500'), 500);
+                        return;
+                    }
+                    modalConfirmCallback(val);
+                } else {
+                    modalConfirmCallback();
+                }
+            }
+            closeModal();
+        });
+
+        // Close on backdrop click
+        modalBackdrop.addEventListener('click', (e) => {
+            if (e.target === modalBackdrop) closeModal();
+        });
+
+
+        // === 5. UI HELPER FUNCTIONS ===
+        function showError(msg) {
+            errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`;
+            errorBanner.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorBanner.classList.add('hidden');
+        }
+
+        function renderRow(id, item) {
+            const row = document.createElement('tr');
+            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800';
+            const qtyFormatted = parseInt(item.qty).toLocaleString('id-ID');
+
+            row.innerHTML = `
+                <td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td>
+                <td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${qtyFormatted}</td>
+                <td class="p-4 text-right">
+                    <div class="flex justify-end gap-2">
+                        <button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" 
+                            data-name="${item.name}" data-qty="${item.qty}">
+                            <i class="fa-solid fa-pen"></i> EDIT
+                        </button>
+                        <button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" 
+                            data-id="${id}" data-name="${item.name}" data-qty="${item.qty}">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            `;
+            tableBody.appendChild(row);
+        }
+
+        function renderOption(name) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            datalist.appendChild(opt);
+        }
+
+        function renderLogCard(id, log) {
+            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "Memproses...";
+            let changeClass = "text-cartel-gold";
+            if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
+            if (String(log.change).includes('+')) changeClass = "text-green-500";
+
+            const cardHTML = `
+                <div class="fade-in mb-6 relative group">
+                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
+                            <i class="fa-solid fa-camera"></i> Save IMG
+                        </button>
+                    </div>
+                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl relative w-full">
+                         <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full ${log.type === 'DELETED' ? 'bg-red-600' : 'bg-cartel-gold'}"></div>
+                                <span class="text-xs font-bold text-gray-400 tracking-wider">LOG RECORD</span>
+                            </div>
+                            <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
+                        </div>
+                        <div class="p-5 relative z-10 bg-[#121212]">
+                            <div class="flex justify-between items-start mb-4">
+                                <h3 class="text-xl font-bold text-white ${log.type === 'DELETED' ? 'line-through text-gray-500' : ''}">${log.name}</h3>
+                                ${log.type === 'DELETED' ? '<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>' : ''}
+                            </div>
+                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-3">
+                                <div class="p-2 text-center border-r border-gray-800">
+                                    <div class="text-[9px] text-gray-500">AWAL</div>
+                                    <div class="font-mono text-gray-400 font-bold">${log.prev}</div>
+                                </div>
+                                <div class="p-2 text-center border-r border-gray-800">
+                                    <div class="text-[9px] text-gray-500">UBAH</div>
+                                    <div class="font-mono ${changeClass} font-bold text-lg">${String(log.change).replace('Set:', '').replace('New:', '')}</div>
+                                </div>
+                                <div class="p-2 text-center">
+                                    <div class="text-[9px] text-gray-500">AKHIR</div>
+                                    <div class="font-mono text-white font-bold text-lg">${log.after}</div>
+                                </div>
+                            </div>
+                             <div class="flex justify-between items-center border-t border-gray-800 pt-2">
+                                <span class="text-[10px] text-gray-500">PIC:</span>
+                                <span class="text-xs font-bold text-cartel-gold uppercase"><i class="fa-solid fa-user-check mr-1"></i> ${log.pic || 'Unknown'}</span>
+                            </div>
+                        </div>
+                        <div class="h-1.5 w-full ${log.type === 'DELETED' ? 'bg-red-900' : 'bg-cartel-gold'}"></div>
+                    </div>
+                </div>
+            `;
+            historyContainer.insertAdjacentHTML('beforeend', cardHTML);
+        }
+
+        // === 6. EVENT HANDLERS ===
+        tableBody.addEventListener('click', (e) => {
+            const target = e.target.closest('button');
+            if (!target) return;
+            const id = target.dataset.id;
+            const name = target.dataset.name;
+            const qty = parseInt(target.dataset.qty);
+
+            if (target.classList.contains('btn-edit')) {
+                prepareUpdate(name, qty);
+            } else if (target.classList.contains('btn-delete')) {
+                deleteItem(id, name, qty);
+            }
+        });
+
+        function prepareUpdate(name, qty) {
+            document.getElementById('itemName').value = name;
+            document.getElementById('itemQty').value = qty;
+            const select = document.getElementById('actionType');
+            select.value = 'set';
+            select.classList.add('ring-2', 'ring-cartel-gold');
+            document.getElementById('itemName').focus();
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Menunggu koneksi auth..." });
+
+            const pic = document.getElementById('picName').value.trim();
+            const name = document.getElementById('itemName').value.trim();
+            const action = document.getElementById('actionType').value;
+            const inputQty = parseInt(document.getElementById('itemQty').value);
+
+            if (!pic || !name || isNaN(inputQty) || inputQty < 0) {
+                showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi Nama PIC, Nama Barang, dan Jumlah yang valid." });
+                return;
+            }
+
+            const btnSubmit = form.querySelector('button[type="submit"]');
+            const originalBtnText = btnSubmit.innerHTML;
+            btnSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
+            btnSubmit.disabled = true;
+
+            try {
+                // Query By Name
+                const qSearch = query(collection(db, "items"), where("name", "==", name));
+                const querySnapshot = await getDocs(qSearch);
+
+                let prevQty = 0;
+                let finalQty = 0;
+                let changeTxt = "";
+                let logType = "UPDATE";
+
+                if (!querySnapshot.empty) {
+                    const docRef = querySnapshot.docs[0];
+                    const targetId = docRef.id;
+                    const currentQty = parseInt(docRef.data().qty);
+                    prevQty = currentQty;
+
+                    if (action === 'add') {
+                        finalQty = currentQty + inputQty;
+                        changeTxt = `+ ${inputQty}`;
+                    } else if (action === 'remove') {
+                        if (currentQty < inputQty) throw new Error(`Stok kurang! Sisa: ${currentQty}`);
+                        finalQty = currentQty - inputQty;
+                        changeTxt = `- ${inputQty}`;
+                    } else if (action === 'set') {
+                        finalQty = inputQty;
+                        const diff = inputQty - currentQty;
+                        changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`;
+                    }
+
+                    await updateDoc(doc(db, "items", targetId), { qty: finalQty });
+                } else {
+                    if (action === 'remove') throw new Error("Item baru tidak bisa dikurangi.");
+                    prevQty = 0;
+                    finalQty = inputQty;
+                    changeTxt = `New: +${inputQty}`;
+                    logType = "CREATE";
+
+                    await addDoc(collection(db, "items"), {
+                        name: name,
+                        qty: finalQty,
+                        created_at: serverTimestamp()
+                    });
+                }
+                await addLog(name, prevQty, changeTxt, finalQty, logType, pic);
+                
+                // Show Success Modal
+                showModal({ 
+                    type: 'success', 
+                    title: 'Transaksi Berhasil', 
+                    message: `Item ${name} berhasil diperbarui.` 
+                });
+
+                // Reset UI
+                document.getElementById('itemQty').value = 1;
+                document.getElementById('actionType').value = 'add';
+                document.getElementById('actionType').classList.remove('ring-2', 'ring-cartel-gold');
+
+            } catch (err) {
+                console.error(err);
+                if (err.code === 'permission-denied') {
+                    showModal({ type: 'error', title: 'Akses Ditolak', message: "Database terkunci. Ubah Security Rules di Firebase Console." });
+                } else {
+                    showModal({ type: 'error', title: 'Gagal', message: err.message });
+                }
+            } finally {
+                btnSubmit.innerHTML = originalBtnText;
+                btnSubmit.disabled = false;
+            }
+        });
+
+        async function deleteItem(id, name, qty) {
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+
+            // Gunakan Custom Modal untuk konfirmasi + Input PIC
+            showModal({
+                type: 'delete',
+                title: 'Konfirmasi Pemusnahan',
+                message: `Anda yakin ingin menghapus permanen item "${name}" dari database? Data tidak bisa dikembalikan.`,
+                useInput: true, // Aktifkan input PIC
+                onConfirm: async (picValue) => {
+                    // Logic Delete dijalankan jika user klik Confirm
+                    try {
+                        await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue);
+                        await deleteDoc(doc(db, "items", id));
+                        
+                        // Feedback sukses setelah modal tutup
+                        setTimeout(() => {
+                             showModal({ type: 'success', title: 'Pemusnahan Berhasil', message: `Item ${name} telah dihapus.` });
+                        }, 500);
+                    } catch (e) {
+                        showModal({ type: 'error', title: 'Gagal', message: e.message });
+                    }
+                }
+            });
+        }
+
+        async function addLog(name, prev, change, after, type, pic) {
+            await addDoc(collection(db, "logs"), {
+                name: name, prev, change, after, type, pic,
+                timestamp: serverTimestamp()
+            });
+        }
+
+        window.captureReport = function(elementId) {
+            const element = document.getElementById(elementId);
+            if(!element) return;
+            html2canvas(element, { scale: 3, backgroundColor: '#121212', useCORS: true }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = `Vikrama_Log_${Date.now()}.png`;
+                link.href = canvas.toDataURL("image/png", 1.0);
+                link.click();
+            });
+        }
+    </script>
+    
+    <!-- Config Theme -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { cartel: { bg: '#0f0f0f', panel: '#1a1a1a', border: '#333333', gold: '#d4af37' } }
+                }
+            }
+        }
+        setInterval(() => {
+            const now = new Date();
+            const elClock = document.getElementById('clock');
+            if(elClock) elClock.innerText = now.toLocaleTimeString('id-ID', { hour12: false });
+        }, 1000);
+    </script>
+</head>
+<body class="min-h-screen flex flex-col p-4 md:p-8 bg-[#0f0f0f] text-white">
+
+    <!-- MODAL CONFIRMATION DIALOG -->
+    <div id="modalBackdrop" class="fixed inset-0 bg-black/90 z-50 hidden flex items-center justify-center backdrop-blur-sm opacity-0 transition-opacity duration-300">
+        <div id="modalCard" class="bg-[#1a1a1a] border border-cartel-gold/50 rounded-lg p-6 max-w-sm w-full mx-4 shadow-[0_0_30px_rgba(212,175,55,0.2)] transform scale-95 transition-transform duration-300">
+            <!-- Icon Area -->
+            <div id="modalIcon" class="text-4xl text-center mb-4 text-cartel-gold"></div>
+            
+            <!-- Title -->
+            <h3 id="modalTitle" class="text-xl font-bold text-center text-white mb-2 uppercase tracking-widest"></h3>
+            
+            <!-- Message -->
+            <p id="modalMessage" class="text-gray-400 text-center text-sm mb-6"></p>
+
+            <!-- Input Area (Hidden by default, used for PIC on delete) -->
+            <div id="modalInputContainer" class="hidden mb-6">
+                <label class="block text-xs text-gray-500 mb-1 uppercase text-center">PIC Eksekutor (Wajib)</label>
+                <input type="text" id="modalInput" class="w-full bg-black border border-cartel-border text-white px-3 py-2 rounded focus:outline-none focus:border-cartel-gold text-center" placeholder="Ketik Nama Anda...">
+            </div>
+
+            <!-- Buttons -->
+            <div class="flex gap-3 justify-center">
+                <button id="btnModalCancel" class="hidden px-4 py-2 rounded border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800 transition text-sm font-bold uppercase">Batal</button>
+                <button id="btnModalConfirm" class="px-6 py-2 rounded bg-cartel-gold text-black font-bold hover:bg-yellow-500 transition shadow-lg uppercase tracking-wider">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ERROR BANNER -->
+    <div id="errorBanner" class="hidden bg-red-900/90 text-white text-center p-3 mb-4 rounded border border-red-500 font-bold animate-pulse text-sm"></div>
+
+    <!-- HEADER -->
+    <header class="max-w-7xl mx-auto w-full flex flex-col md:flex-row justify-between items-center mb-8 border-b border-cartel-border pb-6">
+        <div class="flex items-center gap-4 mb-4 md:mb-0">
+            <div class="w-14 h-14 border-2 border-cartel-gold rounded-full flex items-center justify-center text-cartel-gold text-2xl shadow-[0_0_15px_rgba(212,175,55,0.3)] bg-black">
+                <i class="fa-solid fa-crown"></i>
+            </div>
+            <div>
+                <h1 class="text-3xl font-bold text-cartel-gold tracking-widest uppercase">Vikrama Kulapati</h1>
+                <p class="text-xs text-gray-500 tracking-[0.3em] uppercase">Cloud Inventory System</p>
+            </div>
+        </div>
+        <div class="text-right">
+            <div id="clock" class="text-xl font-mono font-bold text-gray-300">Loading...</div>
+            <div id="date" class="text-xs text-gray-500 uppercase">Connecting...</div>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <!-- KIRI: FORM & LOGS -->
+        <section class="lg:col-span-5 flex flex-col gap-6 h-full">
+            <div class="bg-cartel-panel p-6 rounded-lg border border-cartel-border shadow-lg relative z-20">
+                <h2 class="text-cartel-gold text-lg font-bold mb-4 border-b border-cartel-border pb-2 flex items-center gap-2">
+                    <i class="fa-solid fa-pen-to-square"></i> Input Transaksi
+                </h2>
+                <form id="inventoryForm" class="space-y-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama PIC</label>
+                        <div class="relative">
+                            <span class="absolute left-3 top-3 text-gray-500"><i class="fa-solid fa-user-secret"></i></span>
+                            <input type="text" id="picName" placeholder="Nama Anda..." class="w-full bg-black border border-cartel-border text-white pl-10 pr-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700" required>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama Barang</label>
+                        <input type="text" id="itemName" list="itemList" autocomplete="off" placeholder="Cari atau input baru..." class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700">
+                        <datalist id="itemList"></datalist>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Aksi</label>
+                            <select id="actionType" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold cursor-pointer">
+                                <option value="add">➕ Masuk (Add)</option>
+                                <option value="remove">➖ Keluar (Remove)</option>
+                                <option value="set">🔄 Set Ulang (Fix)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Jumlah</label>
+                            <input type="number" id="itemQty" min="1" value="1" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold font-mono">
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full bg-gradient-to-r from-cartel-gold to-yellow-700 text-black font-bold py-3 rounded hover:brightness-110 transition shadow-lg mt-2 uppercase tracking-wide">
+                        <i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database
+                    </button>
+                </form>
+            </div>
+            <div class="flex-grow flex flex-col min-h-[400px]">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-xs text-gray-500 uppercase font-bold tracking-wider"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Live Logs</span>
+                    <span class="text-[10px] text-gray-600">Sync with Server</span>
+                </div>
+                <div id="reportHistoryContainer" class="flex-grow overflow-y-auto pr-2 pb-10 max-h-[600px]">
+                    <div id="emptyReportState" class="text-center py-10 opacity-30">
+                        <i class="fa-solid fa-satellite-dish text-4xl mb-2 animate-pulse"></i>
+                        <p class="text-sm">Menunggu Data Server...</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- KANAN: TABEL -->
+        <section class="lg:col-span-7 h-full">
+            <div class="bg-cartel-panel rounded-lg border border-cartel-border shadow-lg overflow-hidden flex flex-col h-full min-h-[600px]">
+                <div class="p-5 border-b border-cartel-border flex justify-between items-center bg-[#151515]">
+                    <h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2"><i class="fa-solid fa-database"></i> Database Cartel</h2>
+                    <div class="bg-cartel-gold text-black px-3 py-1 rounded text-xs font-bold shadow-lg">Items: <span id="totalItems">0</span></div>
+                </div>
+                <div class="overflow-x-auto flex-grow">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-[#121212] text-xs text-gray-500 uppercase tracking-wider border-b border-cartel-border">
+                                <th class="p-4 font-medium">Nama Barang</th>
+                                <th class="p-4 font-medium text-center">Jumlah</th>
+                                <th class="p-4 font-medium text-right">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryTable" class="text-sm divide-y divide-gray-800"></tbody>
+                    </table>
+                </div>
+                <div id="emptyTableState" class="hidden flex-col items-center justify-center h-64 text-gray-600">
+                    <i class="fa-solid fa-cloud text-5xl mb-4 opacity-20"></i>
+                    <p class="text-sm">Database Kosong / Loading...</p>
+                </div>
+            </div>
+        </section>
+    </main>
+    <footer class="text-center text-gray-600 text-xs py-6 border-t border-gray-900 mt-auto bg-[#0a0a0a]">&copy; 2026 Vikrama Kulapati. Cloud System v2.0</footer>
+</body>
+</html>
