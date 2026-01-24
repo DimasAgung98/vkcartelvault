@@ -18,7 +18,7 @@
         import { 
             getFirestore, collection, addDoc, onSnapshot, 
             doc, deleteDoc, updateDoc, query, orderBy, serverTimestamp,
-            getDocs, where 
+            getDocs, where, writeBatch 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         // IMPORT AUTHENTICATION (PENTING UNTUK FIX PERMISSION ERROR)
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -48,6 +48,7 @@
         const datalist = document.getElementById('itemList');
         const form = document.getElementById('inventoryForm');
         const errorBanner = document.getElementById('errorBanner');
+        const btnClearLogs = document.getElementById('btnClearLogs');
 
         // Modal Elements
         const modalBackdrop = document.getElementById('modalBackdrop');
@@ -450,6 +451,50 @@
             }
         });
 
+        // Event Listener untuk Tombol Hapus Log
+        if(btnClearLogs) {
+            btnClearLogs.addEventListener('click', () => {
+                if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+
+                showModal({
+                    type: 'delete',
+                    title: 'Hapus SEMUA Log?',
+                    message: 'PERINGATAN: Ini akan menghapus SELURUH riwayat log transaksi secara permanen. Tindakan ini tidak dapat dikembalikan.',
+                    useInput: true, 
+                    onConfirm: async (picValue) => {
+                         try {
+                            const logsSnapshot = await getDocs(collection(db, "logs"));
+                            
+                            if (logsSnapshot.empty) {
+                                 showModal({ type: 'error', title: 'Kosong', message: "Tidak ada log untuk dihapus." });
+                                 return;
+                            }
+
+                            // Firebase batch write (max 500 ops per batch)
+                            const batch = writeBatch(db);
+                            let count = 0;
+                            
+                            logsSnapshot.docs.forEach((doc) => {
+                                batch.delete(doc.ref);
+                                count++;
+                            });
+
+                            await batch.commit();
+                            
+                            setTimeout(() => {
+                                 showModal({ type: 'success', title: 'Log Dibersihkan', message: `${count} catatan log telah dihapus oleh ${picValue}.` });
+                                 // Opsional: Buat log baru bahwa history telah direset
+                                 addLog("SYSTEM", 0, "RESET ALL LOGS", 0, "SYSTEM", picValue); 
+                            }, 500);
+
+                         } catch(e) {
+                             showModal({ type: 'error', title: 'Gagal', message: e.message });
+                         }
+                    }
+                })
+            });
+        }
+
         async function deleteItem(id, name, qty) {
             if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
 
@@ -602,7 +647,9 @@
             <div class="flex-grow flex flex-col min-h-[400px]">
                 <div class="flex justify-between items-center mb-2">
                     <span class="text-xs text-gray-500 uppercase font-bold tracking-wider"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Live Logs</span>
-                    <span class="text-[10px] text-gray-600">Sync with Server</span>
+                    <button id="btnClearLogs" class="text-[10px] text-red-500 hover:text-red-400 font-bold border border-red-900 bg-red-900/20 px-2 py-1 rounded transition">
+                        <i class="fa-solid fa-trash-can mr-1"></i> CLEAR LOGS
+                    </button>
                 </div>
                 <div id="reportHistoryContainer" class="flex-grow overflow-y-auto pr-2 pb-10 max-h-[600px]">
                     <div id="emptyReportState" class="text-center py-10 opacity-30">
