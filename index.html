@@ -10,8 +10,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Html2Canvas -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- Html2Canvas
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script> -->
+    <!-- Html2Canvas - Versi Stabil -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- FIREBASE SDK -->
     <script type="module">
@@ -140,6 +142,17 @@
                 else { await setDoc(pinDocRef, { pin: "1234" }); systemPin = "1234"; }
             } catch (e) { console.error("PIN Error:", e); }
         }
+
+        // Test apakah html2canvas loaded
+window.testHtml2Canvas = function() {
+    if (typeof html2canvas === 'undefined') {
+        alert('❌ Html2Canvas TIDAK LOADED! Periksa koneksi internet.');
+        return false;
+    } else {
+        alert('✅ Html2Canvas berhasil loaded!');
+        return true;
+    }
+}
 
         // --- 2. PIN LOGIC ---
         window.checkPin = function() {
@@ -275,19 +288,33 @@
 
             // LOGS LISTENER
             const qLogs = query(collection(db, "logs"), orderBy("timestamp", "desc"));
-            onSnapshot(qLogs, (snapshot) => {
-                const invLogContainer = document.getElementById('reportHistoryContainer');
-                const craftLogContainer = document.getElementById('craftingHistoryContainer');
-                
-                invLogContainer.innerHTML = ''; 
-                craftLogContainer.innerHTML = '';
+                onSnapshot(qLogs, (snapshot) => {
+                    const invLogContainer = document.getElementById('reportHistoryContainer');
+                    const craftLogContainer = document.getElementById('craftingHistoryContainer');
+                    
+                    if (!invLogContainer || !craftLogContainer) {
+                        console.error("❌ Container log tidak ditemukan!");
+                        return;
+                    }
+                    
+                    invLogContainer.innerHTML = ''; 
+                    craftLogContainer.innerHTML = '';
 
-                snapshot.forEach((docSnap) => {
-                    const log = docSnap.data();
-                    renderLogCard(docSnap.id, log, invLogContainer);
-                    if (log.type === 'CRAFTING') renderLogCard(docSnap.id, log, craftLogContainer, true);
+                    snapshot.forEach((docSnap) => {
+                        const log = docSnap.data();
+                        const logId = docSnap.id;
+                        
+                        // Render ke Inventory History
+                        renderLogCard(logId, log, invLogContainer, false);
+                        
+                        // Render ke Crafting History dengan fungsi khusus
+                        if (log.type === 'CRAFTING') {
+                            renderCraftingLogCard(logId, log, craftLogContainer);
+                        }
+                    });
+                    
+                    console.log("✅ Logs rendered. Crafting logs:", document.querySelectorAll('#craftingHistoryContainer [id^="log-"]').length);
                 });
-            });
 
             // RECIPES LISTENER
             const qRecipes = query(collection(db, "recipes"), orderBy("name"));
@@ -577,10 +604,20 @@
         }
 
         function renderLogCard(id, log, container, isCraftingView = false) {
+            console.log("🔍 renderLogCard called:", {
+                id: id,
+                logType: log.type,
+                containerID: container.id,
+                isCraftingView: isCraftingView
+            });
+            
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
             let changeClass = "text-cartel-gold";
             if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
             else if (String(log.change).includes('+')) changeClass = "text-green-500";
+
+            const uniqueLogId = `log-${id}`;
+            console.log("📌 Generated uniqueLogId:", uniqueLogId, "for container:", container.id);
             
             let detailsHTML = '';
             if (isCraftingView && log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
@@ -590,9 +627,13 @@
             let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
 
             const html = `
-                <div class="fade-in mb-6 relative group">
-                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
-                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
+    <div class="fade-in mb-6 relative group">
+        <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
+                <i class="fa-solid fa-camera"></i> IMG
+            </button>
+        </div>
+        <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
                         <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
                         <div class="p-5 relative z-10 bg-[#121212]">
                             <div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div>
@@ -609,6 +650,88 @@
                 </div>`;
             container.insertAdjacentHTML('beforeend', html);
         }
+
+        function renderCraftingLogCard(id, log, container) {
+    const uniqueLogId = `craft-log-${id}`;
+    console.log("🎯 Rendering CRAFTING log with ID:", uniqueLogId);
+    
+    let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
+    
+    let ingredientsHTML = '';
+    if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
+        let rows = log.ingredientsSnapshot.map(ing => 
+            `<tr class="border-b border-gray-800 last:border-0 text-[10px]">
+                <td class="py-1 text-gray-400">${ing.name}</td>
+                <td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td>
+                <td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td>
+            </tr>`
+        ).join('');
+        
+        ingredientsHTML = `
+            <div class="mt-3 bg-black/40 rounded p-2 border border-gray-800">
+                <table class="w-full">
+                    <thead>
+                        <tr class="text-[9px] text-gray-600 border-b border-gray-700">
+                            <th class="text-left pb-1">BAHAN</th>
+                            <th class="text-center pb-1">PAKAI</th>
+                            <th class="text-right pb-1">STOCK LOG</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    }
+    
+    let noteHTML = log.note ? `
+        <div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1">
+            <i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"
+        </div>` : '';
+
+    const html = `
+        <div class="fade-in mb-4 relative group">
+            <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
+                    <i class="fa-solid fa-camera"></i> IMG
+                </button>
+            </div>
+            <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full">
+                <div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800">
+                    <div class="flex items-center gap-2">
+                        <div class="w-2 h-2 rounded-full bg-blue-500"></div>
+                        <span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span>
+                    </div>
+                    <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
+                </div>
+                <div class="p-4 relative z-10 bg-[#121212]">
+                    <h3 class="text-lg font-bold text-white mb-3">${log.name}</h3>
+                    <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
+                        <div class="p-2 text-center border-r border-gray-800">
+                            <div class="text-[9px] text-gray-500">AWAL</div>
+                            <div class="font-mono text-gray-400 font-bold">${log.prev}</div>
+                        </div>
+                        <div class="p-2 text-center border-r border-gray-800">
+                            <div class="text-[9px] text-gray-500">AKSI</div>
+                            <div class="font-mono text-green-500 font-bold">${log.change}</div>
+                        </div>
+                        <div class="p-2 text-center">
+                            <div class="text-[9px] text-gray-500">AKHIR</div>
+                            <div class="font-mono text-white font-bold">${log.after}</div>
+                        </div>
+                    </div>
+                    ${ingredientsHTML}
+                    ${noteHTML}
+                    <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2">
+                        <span class="text-[10px] text-gray-500">PIC:</span>
+                        <span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span>
+                    </div>
+                </div>
+                <div class="h-1.5 w-full bg-blue-900"></div>
+            </div>
+        </div>`;
+    
+    container.insertAdjacentHTML('beforeend', html);
+    console.log("✅ Crafting log rendered:", uniqueLogId);
+}
 
         // Modal Logic
         window.showModal = function({ type, title, message, useInput, onConfirm }) {
@@ -630,49 +753,79 @@
         
         // FIX: Use Blob instead of Base64 for large images to prevent corruption
         window.captureReport = function(elementId) {
-            const element = document.getElementById(elementId);
-            if(!element) return;
+    const element = document.getElementById(elementId);
+    if(!element) {
+        console.error("Element tidak ditemukan:", elementId);
+        alert("Gagal menemukan elemen log. ID: " + elementId);
+        return;
+    }
 
-            // Visual Feedback (Loading)
-            const btn = element.parentElement.querySelector('button');
-            const originalContent = btn ? btn.innerHTML : '';
-            if(btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    // Cari tombol dengan cara yang lebih robust
+    const parentGroup = element.closest('.group');
+    const btn = parentGroup ? parentGroup.querySelector('button[onclick*="captureReport"]') : null;
+    const originalContent = btn ? btn.innerHTML : '';
+    
+    // Visual Feedback (Loading)
+    if(btn) {
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+        btn.disabled = true;
+    }
 
-            html2canvas(element, { 
-                scale: 2, 
-                backgroundColor: '#121212', 
-                useCORS: true 
-            }).then(canvas => {
-                canvas.toBlob(function(blob) {
-                    if (!blob) {
-                        alert("Gagal membuat file gambar.");
-                        if(btn) btn.innerHTML = originalContent;
-                        return;
-                    }
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.download = `Vikrama_Log_${Date.now()}.png`;
-                    link.href = url;
-                    
-                    // PENTING: Append ke body agar browser mengizinkan download
-                    document.body.appendChild(link); 
-                    link.click();
-                    document.body.removeChild(link); // Bersihkan
-                    
-                    URL.revokeObjectURL(url);
-
-                    // Feedback Sukses
+    // Tambahkan delay kecil untuk memastikan rendering selesai
+    setTimeout(() => {
+        html2canvas(element, { 
+            scale: 2, 
+            backgroundColor: '#121212', 
+            useCORS: true,
+            logging: false,
+            allowTaint: true,
+            removeContainer: true
+        }).then(canvas => {
+            canvas.toBlob(function(blob) {
+                if (!blob) {
+                    alert("Gagal membuat file gambar.");
                     if(btn) {
-                        btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
-                        setTimeout(() => btn.innerHTML = originalContent, 2000);
+                        btn.innerHTML = originalContent;
+                        btn.disabled = false;
                     }
-                });
-            }).catch(err => {
-                console.error("Screenshot Error:", err);
-                alert("Gagal mengambil screenshot.");
-                if(btn) btn.innerHTML = originalContent;
-            });
-        }
+                    return;
+                }
+                
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = `Vikrama_Log_${Date.now()}.png`;
+                link.href = url;
+                link.style.display = 'none';
+                
+                // PENTING: Append ke body agar browser mengizinkan download
+                document.body.appendChild(link); 
+                link.click();
+                
+                // Cleanup dengan delay
+                setTimeout(() => {
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }, 100);
+
+                // Feedback Sukses
+                if(btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
+                    btn.disabled = false;
+                    setTimeout(() => {
+                        btn.innerHTML = originalContent;
+                    }, 2000);
+                }
+            }, 'image/png', 1.0);
+        }).catch(err => {
+            console.error("Screenshot Error:", err);
+            alert("Gagal mengambil screenshot: " + err.message);
+            if(btn) {
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }
+        });
+    }, 100);
+}
     </script>
     <script>
         tailwind.config = { theme: { extend: { colors: { cartel: { bg: '#0f0f0f', panel: '#1a1a1a', border: '#333333', gold: '#d4af37' } }, animation: { shake: 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both' }, keyframes: { shake: { '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' }, '20%, 80%': { transform: 'translate3d(2px, 0, 0)' }, '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' }, '40%, 60%': { transform: 'translate3d(4px, 0, 0)' } } } } } }
