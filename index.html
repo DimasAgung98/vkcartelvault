@@ -37,7 +37,8 @@
         let db, auth, currentUser = null;
         let systemPin = "1234";
         let inventoryCache = {}; 
-        let recipes = []; // Dynamic Recipes
+        let recipes = [];
+        let currentViewMode = 'list'; // 'list' or 'grid'
 
         // DOM Elements
         const statusEl = document.getElementById('date'); 
@@ -49,6 +50,12 @@
         const viewCrafting = document.getElementById('view-crafting');
         const tabInventory = document.getElementById('tab-inventory');
         const tabCrafting = document.getElementById('tab-crafting');
+
+        // Inventory Elements
+        const inventoryTable = document.getElementById('inventoryTable');
+        const inventoryGrid = document.getElementById('inventoryGrid');
+        const btnViewList = document.getElementById('btnViewList');
+        const btnViewGrid = document.getElementById('btnViewGrid');
 
         // Modal Elements
         const modalBackdrop = document.getElementById('modalBackdrop');
@@ -68,6 +75,22 @@
         const recipeForm = document.getElementById('recipeForm');
         const ingredientsListContainer = document.getElementById('ingredientsListContainer');
         const btnAddIngredient = document.getElementById('btnAddIngredient');
+
+        // --- UI HELPERS (DIPERBAIKI: Ditambahkan kembali agar tidak error) ---
+        function showError(msg) {
+            if (errorBanner) {
+                errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`;
+                errorBanner.classList.remove('hidden');
+            } else {
+                console.error("Error Banner not found:", msg);
+            }
+        }
+
+        function hideError() {
+            if (errorBanner) {
+                errorBanner.classList.add('hidden');
+            }
+        }
 
         // --- 1. INITIALIZATION ---
         async function initSystem() {
@@ -97,7 +120,7 @@
                         currentUser = user;
                         statusEl.innerText = "SYSTEM ONLINE";
                         statusEl.className = "text-xs text-green-500 font-bold uppercase";
-                        hideError(); 
+                        hideError(); // Sekarang fungsi ini sudah ada
                         await fetchSystemPin();
                         document.getElementById('loginStatus').innerText = "System Connected. Masukkan PIN.";
                         document.getElementById('loginStatus').className = "text-center text-xs text-green-500 font-mono mt-2";
@@ -163,25 +186,60 @@
                 tabCrafting.classList.remove('text-gray-400', 'hover:text-white');
                 tabInventory.classList.remove('bg-cartel-gold', 'text-black');
                 tabInventory.classList.add('text-gray-400', 'hover:text-white');
-                updateCraftingUI(); // Refresh UI when switching
+                updateCraftingUI();
             }
         }
 
-        // --- 4. DATABASE LISTENERS ---
+        // --- 4. VIEW TOGGLE (LIST/GRID) ---
+        window.switchView = function(mode) {
+            currentViewMode = mode;
+            if (mode === 'list') {
+                btnViewList.classList.add('text-cartel-gold', 'bg-gray-800');
+                btnViewList.classList.remove('text-gray-500');
+                btnViewGrid.classList.remove('text-cartel-gold', 'bg-gray-800');
+                btnViewGrid.classList.add('text-gray-500');
+                inventoryTable.parentElement.classList.remove('hidden');
+                inventoryGrid.classList.add('hidden');
+            } else {
+                btnViewGrid.classList.add('text-cartel-gold', 'bg-gray-800');
+                btnViewGrid.classList.remove('text-gray-500');
+                btnViewList.classList.remove('text-cartel-gold', 'bg-gray-800');
+                btnViewList.classList.add('text-gray-500');
+                inventoryTable.parentElement.classList.add('hidden');
+                inventoryGrid.classList.remove('hidden');
+            }
+        }
+
+        // --- 5. HELPER: ICON GENERATOR ---
+        function getIconForName(name) {
+            name = name.toLowerCase();
+            if (name.includes('ganja') || name.includes('weed') || name.includes('cannabis')) return 'fa-cannabis';
+            if (name.includes('uang') || name.includes('money') || name.includes('cash')) return 'fa-money-bill-wave';
+            if (name.includes('senjata') || name.includes('gun') || name.includes('pistol') || name.includes('rifle') || name.includes('ak-47')) return 'fa-person-rifle';
+            if (name.includes('ammo') || name.includes('peluru')) return 'fa-bullseye';
+            if (name.includes('micin') || name.includes('meth') || name.includes('sabu')) return 'fa-icicles';
+            if (name.includes('plastik') || name.includes('pack')) return 'fa-box-open';
+            if (name.includes('hp') || name.includes('phone')) return 'fa-mobile-screen';
+            if (name.includes('armor') || name.includes('kevlar')) return 'fa-shield-halved';
+            if (name.includes('kunci') || name.includes('key')) return 'fa-key';
+            return 'fa-box';
+        }
+
+        // --- 6. DATABASE LISTENERS ---
         function startDatabaseListeners() {
             if (!db) return;
 
             // ITEMS LISTENER
             const qItems = query(collection(db, "items"), orderBy("name"));
             onSnapshot(qItems, (snapshot) => {
-                const tableBody = document.getElementById('inventoryTable');
                 const datalist = document.getElementById('itemList');
                 const emptyTable = document.getElementById('emptyTableState');
                 const totalLabel = document.getElementById('totalItems');
                 
-                tableBody.innerHTML = '';
+                inventoryTable.innerHTML = '';
+                inventoryGrid.innerHTML = '';
                 datalist.innerHTML = '';
-                inventoryCache = {}; // Reset Cache
+                inventoryCache = {}; 
                 let count = 0;
 
                 if (snapshot.empty) {
@@ -191,14 +249,14 @@
                     snapshot.forEach((docSnap) => {
                         const item = docSnap.data();
                         
-                        // Save to Cache for Crafting Logic
                         inventoryCache[item.name.toLowerCase()] = {
                             id: docSnap.id,
                             name: item.name, 
                             qty: parseInt(item.qty) || 0
                         };
 
-                        renderRow(docSnap.id, item, tableBody);
+                        renderRow(docSnap.id, item, inventoryTable);
+                        renderGridCard(docSnap.id, item, inventoryGrid);
                         
                         const opt = document.createElement('option');
                         opt.value = item.name;
@@ -226,10 +284,7 @@
 
                 snapshot.forEach((docSnap) => {
                     const log = docSnap.data();
-                    // Render basic log for inventory page
                     renderLogCard(docSnap.id, log, invLogContainer);
-                    
-                    // Render detailed log for crafting page
                     if (log.type === 'CRAFTING') renderLogCard(docSnap.id, log, craftLogContainer, true);
                 });
             });
@@ -241,14 +296,11 @@
                 snapshot.forEach(docSnap => {
                     recipes.push({ id: docSnap.id, ...docSnap.data() });
                 });
-                
                 updateCraftingUI();
             });
         }
 
-        // --- 5. RECIPE & CRAFTING LOGIC ---
-        
-        // UI Render
+        // --- 7. RECIPE & CRAFTING LOGIC ---
         function updateCraftingUI() {
             const container = document.getElementById('recipeContainer');
             container.innerHTML = '';
@@ -259,23 +311,15 @@
             }
 
             recipes.forEach(recipe => {
-                // Generate Ingredients HTML based on cache
                 let ingredientHTML = '';
-                
                 recipe.ingredients.forEach(ing => {
                     const stockItem = inventoryCache[ing.name.toLowerCase()];
                     const currentQty = stockItem ? stockItem.qty : 0;
-                    
                     ingredientHTML += `
                         <div class="flex justify-between text-xs mb-1 border-b border-gray-800 pb-1 last:border-0">
-                            <span class="text-gray-400">
-                                ${ing.name} (x${ing.qty})
-                            </span>
-                            <span class="${currentQty >= ing.qty ? 'text-green-500' : 'text-red-500'} font-mono">
-                                Stok: ${currentQty}
-                            </span>
-                        </div>
-                    `;
+                            <span class="text-gray-400">${ing.name} (x${ing.qty})</span>
+                            <span class="${currentQty >= ing.qty ? 'text-green-500' : 'text-red-500'} font-mono">Stok: ${currentQty}</span>
+                        </div>`;
                 });
 
                 const card = document.createElement('div');
@@ -285,33 +329,21 @@
                         <button onclick="editRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-gray-300 px-2 py-1 rounded hover:bg-cartel-gold hover:text-black"><i class="fa-solid fa-pen"></i></button>
                         <button onclick="deleteRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-red-500 px-2 py-1 rounded hover:bg-red-900 hover:text-white"><i class="fa-solid fa-trash"></i></button>
                     </div>
-                    
                     <h3 class="text-lg font-bold text-cartel-gold mb-1 truncate pr-16">${recipe.name}</h3>
-                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">
-                        Output: <span class="text-white">${recipe.outputQty}x ${recipe.outputName}</span>
-                    </p>
-                    
-                    <div class="bg-black/50 p-3 rounded mb-4 border border-gray-800 min-h-[60px]">
-                        ${ingredientHTML}
-                    </div>
-
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Output: <span class="text-white">${recipe.outputQty}x ${recipe.outputName}</span></p>
+                    <div class="bg-black/50 p-3 rounded mb-4 border border-gray-800 min-h-[60px]">${ingredientHTML}</div>
                     <div class="flex gap-2 items-center">
                         <div class="relative w-20">
-                            <input type="number" id="qty-${recipe.id}" min="1" value="1" 
-                                class="w-full bg-black border border-cartel-border text-center text-white text-sm py-2 rounded focus:border-cartel-gold font-mono">
+                            <input type="number" id="qty-${recipe.id}" min="1" value="1" class="w-full bg-black border border-cartel-border text-center text-white text-sm py-2 rounded focus:border-cartel-gold font-mono">
                             <span class="absolute -top-2 left-1 text-[9px] bg-cartel-panel px-1 text-gray-500">Jumlah</span>
                         </div>
-                        <button onclick="processCraft('${recipe.id}')" 
-                            class="flex-grow py-2 rounded font-bold text-sm uppercase tracking-wider transition shadow-lg bg-cartel-gold text-black hover:bg-yellow-500">
-                            <i class="fa-solid fa-hammer mr-2"></i> CRAFT
-                        </button>
+                        <button onclick="processCraft('${recipe.id}')" class="flex-grow py-2 rounded font-bold text-sm uppercase tracking-wider transition shadow-lg bg-cartel-gold text-black hover:bg-yellow-500"><i class="fa-solid fa-hammer mr-2"></i> CRAFT</button>
                     </div>
                 `;
                 container.appendChild(card);
             });
         }
 
-        // Logic Process Craft
         window.processCraft = function(recipeId) {
             if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
 
@@ -323,26 +355,16 @@
 
             if (craftMultiplier < 1) return showModal({ type: 'error', title: 'Error', message: 'Jumlah tidak valid.' });
 
-            // Check Stock first (Client side check)
             let missingIngredients = [];
             recipe.ingredients.forEach(ing => {
                 const requiredTotal = ing.qty * craftMultiplier;
                 const stockItem = inventoryCache[ing.name.toLowerCase()];
                 const currentQty = stockItem ? stockItem.qty : 0;
-                if (currentQty < requiredTotal) {
-                    missingIngredients.push(`${ing.name} (Kurang: ${requiredTotal - currentQty})`);
-                }
+                if (currentQty < requiredTotal) missingIngredients.push(`${ing.name} (Kurang: ${requiredTotal - currentQty})`);
             });
 
-            if (missingIngredients.length > 0) {
-                return showModal({ 
-                    type: 'error', 
-                    title: 'Bahan Tidak Cukup', 
-                    message: `Gagal membuat ${craftMultiplier} paket. \n${missingIngredients.join(', ')}` 
-                });
-            }
+            if (missingIngredients.length > 0) return showModal({ type: 'error', title: 'Bahan Tidak Cukup', message: `Gagal membuat ${craftMultiplier} paket. \n${missingIngredients.join(', ')}` });
 
-            // Confirm
             showModal({
                 type: 'confirm',
                 title: 'Konfirmasi Crafting',
@@ -352,9 +374,9 @@
                     if (!picValue) return showModal({type:'error', title:'Error', message:'Nama PIC Wajib diisi'});
 
                     const batch = writeBatch(db);
-                    let ingredientsSnapshot = []; // To store log details
+                    let ingredientsSnapshot = [];
                     
-                    // 1. Deduct Ingredients
+                    // Deduct Ingredients
                     for (const ing of recipe.ingredients) {
                         const itemKey = ing.name.toLowerCase();
                         const stockItem = inventoryCache[itemKey];
@@ -364,45 +386,36 @@
                             showModal({ type: 'error', title: 'Gagal', message: `Stok ${ing.name} berubah dan tidak cukup.` });
                             return;
                         }
-                        
                         const newStock = stockItem.qty - requiredTotal;
                         batch.update(doc(db, "items", stockItem.id), { qty: newStock });
-
-                        // Capture snapshot for logging
-                        ingredientsSnapshot.push({
-                            name: ing.name,
-                            used: requiredTotal,
-                            before: stockItem.qty,
-                            after: newStock
-                        });
+                        ingredientsSnapshot.push({ name: ing.name, used: requiredTotal, before: stockItem.qty, after: newStock });
                     }
 
-                    // 2. Add Output Product
+                    // Handle Output
                     const outputKey = recipe.outputName.toLowerCase();
                     const outputTotal = recipe.outputQty * craftMultiplier;
                     const existingOutput = inventoryCache[outputKey];
-                    
+                    let currentOutputStock = 0;
+                    let finalOutputStock = outputTotal;
+
                     if (existingOutput) {
-                        batch.update(doc(db, "items", existingOutput.id), { qty: existingOutput.qty + outputTotal });
+                        currentOutputStock = existingOutput.qty;
+                        finalOutputStock = currentOutputStock + outputTotal;
+                        batch.update(doc(db, "items", existingOutput.id), { qty: finalOutputStock });
                     } else {
                         const newDocRef = doc(collection(db, "items"));
-                        batch.set(newDocRef, {
-                            name: recipe.outputName.toUpperCase(),
-                            qty: outputTotal,
-                            created_at: serverTimestamp()
-                        });
+                        batch.set(newDocRef, { name: recipe.outputName.toUpperCase(), qty: outputTotal, created_at: serverTimestamp() });
                     }
 
-                    // 3. Log with Detailed Ingredients
                     const logRef = doc(collection(db, "logs"));
                     batch.set(logRef, {
                         name: recipe.outputName.toUpperCase(),
-                        prev: "BAHAN",
+                        prev: currentOutputStock,
                         change: `+ ${outputTotal} (CRAFT x${craftMultiplier})`,
-                        after: "PRODUK JADI",
+                        after: finalOutputStock,
                         type: "CRAFTING",
                         pic: picValue,
-                        ingredientsSnapshot: ingredientsSnapshot, // Save detailed array
+                        ingredientsSnapshot: ingredientsSnapshot,
                         timestamp: serverTimestamp()
                     });
 
@@ -417,204 +430,104 @@
             });
         }
 
-        // --- 6. RECIPE MANAGEMENT (DYNAMIC INGREDIENTS) ---
-        
-        // Helper to add ingredient row
+        // --- 8. RECIPE CRUD ---
         window.addIngredientRow = function(name = '', qty = 1) {
             const div = document.createElement('div');
             div.className = 'flex gap-2 mb-2 items-center ingredient-row';
-            div.innerHTML = `
-                <input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" placeholder="NAMA BAHAN" value="${name}" required>
-                <input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}" min="1" required>
-                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 px-2"><i class="fa-solid fa-xmark"></i></button>
-            `;
+            div.innerHTML = `<input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" placeholder="NAMA BAHAN" value="${name}" required><input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}" min="1" required><button type="button" onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 px-2"><i class="fa-solid fa-xmark"></i></button>`;
             ingredientsListContainer.appendChild(div);
         }
-
-        // Open Form (Create Mode)
-        btnOpenRecipeForm.addEventListener('click', () => {
-            document.getElementById('recipeId').value = '';
-            document.getElementById('recipeName').value = '';
-            document.getElementById('recOutName').value = '';
-            document.getElementById('recOutQty').value = 1;
-            document.getElementById('formTitle').innerText = 'Buat Resep Baru';
-            
-            // Clear and add 1 empty row
-            ingredientsListContainer.innerHTML = '';
-            addIngredientRow(); 
-            
-            recipeFormContainer.classList.remove('hidden');
-            recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
-        });
-
-        // Add Ingredient Button
-        btnAddIngredient.addEventListener('click', () => {
-            addIngredientRow();
-        });
-
-        btnCloseRecipeForm.addEventListener('click', () => {
-            recipeFormContainer.classList.add('hidden');
-        });
-
-        // Save Recipe
+        btnOpenRecipeForm.addEventListener('click', () => { document.getElementById('recipeId').value = ''; document.getElementById('recipeName').value = ''; document.getElementById('recOutName').value = ''; document.getElementById('recOutQty').value = 1; document.getElementById('formTitle').innerText = 'Buat Resep Baru'; ingredientsListContainer.innerHTML = ''; addIngredientRow(); recipeFormContainer.classList.remove('hidden'); recipeFormContainer.scrollIntoView({ behavior: 'smooth' }); });
+        btnAddIngredient.addEventListener('click', () => { addIngredientRow(); });
+        btnCloseRecipeForm.addEventListener('click', () => { recipeFormContainer.classList.add('hidden'); });
+        
         recipeForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "System offline." });
-
             const id = document.getElementById('recipeId').value;
             const name = document.getElementById('recipeName').value.trim().toUpperCase();
             const outName = document.getElementById('recOutName').value.trim().toUpperCase();
             const outQty = parseInt(document.getElementById('recOutQty').value);
-            
-            // Gather ingredients
-            const ingRows = document.querySelectorAll('.ingredient-row');
             let ingredients = [];
-            
-            ingRows.forEach(row => {
+            document.querySelectorAll('.ingredient-row').forEach(row => {
                 const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase();
                 const iQty = parseInt(row.querySelector('.rec-ing-qty').value);
-                if (iName && iQty > 0) {
-                    ingredients.push({ name: iName, qty: iQty });
-                }
+                if (iName && iQty > 0) ingredients.push({ name: iName, qty: iQty });
             });
-
-            if(!name || !outName || outQty < 1 || ingredients.length === 0) {
-                return showModal({type:'error', title:'Data Kurang', message:'Nama, Output, dan minimal 1 Bahan valid wajib diisi.'});
-            }
-
-            const recipeData = {
-                name: name,
-                outputName: outName,
-                outputQty: outQty,
-                ingredients: ingredients,
-                updated_at: serverTimestamp()
-            };
-
+            if(!name || !outName || outQty < 1 || ingredients.length === 0) return showModal({type:'error', title:'Data Kurang', message:'Nama, Output, dan minimal 1 Bahan valid wajib diisi.'});
+            
+            const recipeData = { name, outputName: outName, outputQty: outQty, ingredients, updated_at: serverTimestamp() };
             try {
-                if (id) {
-                    await updateDoc(doc(db, "recipes", id), recipeData);
-                    showModal({ type: 'success', title: 'Sukses', message: 'Resep diperbarui.' });
-                } else {
-                    await addDoc(collection(db, "recipes"), recipeData);
-                    showModal({ type: 'success', title: 'Sukses', message: 'Resep baru dibuat.' });
-                }
+                if (id) { await updateDoc(doc(db, "recipes", id), recipeData); showModal({ type: 'success', title: 'Sukses', message: 'Resep diperbarui.' }); } 
+                else { await addDoc(collection(db, "recipes"), recipeData); showModal({ type: 'success', title: 'Sukses', message: 'Resep baru dibuat.' }); }
                 recipeFormContainer.classList.add('hidden');
-            } catch (e) {
-                showModal({ type: 'error', title: 'Gagal', message: e.message });
-            }
+            } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); }
         });
 
-        // Edit Recipe
         window.editRecipe = function(id) {
             const recipe = recipes.find(r => r.id === id);
             if(!recipe) return;
-
             document.getElementById('recipeId').value = id;
             document.getElementById('recipeName').value = recipe.name;
             document.getElementById('recOutName').value = recipe.outputName;
             document.getElementById('recOutQty').value = recipe.outputQty;
-            
-            // Populate ingredients
             ingredientsListContainer.innerHTML = '';
-            if (recipe.ingredients && recipe.ingredients.length > 0) {
-                recipe.ingredients.forEach(ing => addIngredientRow(ing.name, ing.qty));
-            } else {
-                addIngredientRow();
-            }
-
+            if (recipe.ingredients && recipe.ingredients.length > 0) recipe.ingredients.forEach(ing => addIngredientRow(ing.name, ing.qty)); else addIngredientRow();
             document.getElementById('formTitle').innerText = 'Edit Resep';
-            recipeFormContainer.classList.remove('hidden');
-            recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
+            recipeFormContainer.classList.remove('hidden'); recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
         }
-
         window.deleteRecipe = function(id) {
             if (!currentUser) return;
-            showModal({
-                type: 'delete',
-                title: 'Hapus Resep?',
-                message: 'Resep ini akan dihapus permanen.',
-                useInput: false,
-                onConfirm: async () => {
-                    try {
-                        await deleteDoc(doc(db, "recipes", id));
-                        showModal({ type: 'success', title: 'Terhapus', message: 'Resep dihapus.' });
-                    } catch(e) {
-                        showModal({ type: 'error', title: 'Gagal', message: e.message });
-                    }
-                }
-            })
+            showModal({ type: 'delete', title: 'Hapus Resep?', message: 'Resep ini akan dihapus permanen.', useInput: false, onConfirm: async () => { try { await deleteDoc(doc(db, "recipes", id)); showModal({ type: 'success', title: 'Terhapus', message: 'Resep dihapus.' }); } catch(e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } } })
         }
 
-        // --- 7. CORE INVENTORY LOGIC (CRUD) ---
-        document.getElementById('itemName').addEventListener('input', function() {
-            this.value = this.value.toUpperCase();
-        });
-
+        // --- 9. INVENTORY CRUD & UI ---
+        document.getElementById('itemName').addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+        
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Menunggu koneksi auth..." });
-
             const pic = document.getElementById('picName').value.trim();
             const name = document.getElementById('itemName').value.trim().toUpperCase(); 
             const action = document.getElementById('actionType').value;
             const inputQty = parseInt(document.getElementById('itemQty').value);
-            const note = document.getElementById('itemNote').value.trim(); // Capture Note
-
-            if (!pic || !name || isNaN(inputQty) || inputQty < 0) {
-                showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi data." });
-                return;
-            }
-
+            const note = document.getElementById('itemNote').value.trim();
+            if (!pic || !name || isNaN(inputQty) || inputQty < 0) return showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi data." });
+            
             const btnSubmit = form.querySelector('button[type="submit"]');
             btnSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
             btnSubmit.disabled = true;
-
             try {
                 const qSearch = query(collection(db, "items"), where("name", "==", name));
                 const querySnapshot = await getDocs(qSearch);
                 let prevQty = 0, finalQty = 0, changeTxt = "", logType = "UPDATE";
-
                 if (!querySnapshot.empty) {
                     const docRef = querySnapshot.docs[0];
                     const currentQty = parseInt(docRef.data().qty);
                     prevQty = currentQty;
-
                     if (action === 'add') { finalQty = currentQty + inputQty; changeTxt = `+ ${inputQty}`; }
-                    else if (action === 'remove') {
-                        if (currentQty < inputQty) throw new Error("Stok kurang!");
-                        finalQty = currentQty - inputQty; changeTxt = `- ${inputQty}`;
-                    } else if (action === 'set') {
-                        finalQty = inputQty;
-                        const diff = inputQty - currentQty; changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`;
-                    }
+                    else if (action === 'remove') { if (currentQty < inputQty) throw new Error("Stok kurang!"); finalQty = currentQty - inputQty; changeTxt = `- ${inputQty}`; }
+                    else if (action === 'set') { finalQty = inputQty; const diff = inputQty - currentQty; changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`; }
                     await updateDoc(doc(db, "items", docRef.id), { qty: finalQty });
                 } else {
                     if (action === 'remove') throw new Error("Item baru tidak bisa dikurangi.");
                     finalQty = inputQty; changeTxt = `New: +${inputQty}`; logType = "CREATE";
                     await addDoc(collection(db, "items"), { name: name, qty: finalQty, created_at: serverTimestamp() });
                 }
-                
                 await addLog(name, prevQty, changeTxt, finalQty, logType, pic, note);
                 showModal({ type: 'success', title: 'Berhasil', message: `Item ${name} diperbarui.` });
-                document.getElementById('itemQty').value = 1;
-                document.getElementById('itemNote').value = ''; // Reset Note
-                document.getElementById('actionType').value = 'add';
-
-            } catch (err) {
-                showModal({ type: 'error', title: 'Gagal', message: err.message });
-            } finally {
-                btnSubmit.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database';
-                btnSubmit.disabled = false;
-            }
+                document.getElementById('itemQty').value = 1; document.getElementById('itemNote').value = ''; document.getElementById('actionType').value = 'add';
+            } catch (err) { showModal({ type: 'error', title: 'Gagal', message: err.message }); }
+            finally { btnSubmit.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database'; btnSubmit.disabled = false; }
         });
 
-        document.getElementById('inventoryTable').addEventListener('click', (e) => {
+        // Click delegation for buttons in List and Grid
+        const handleItemAction = (e) => {
             const target = e.target.closest('button');
             if (!target) return;
             const id = target.dataset.id;
             const name = target.dataset.name;
             const qty = parseInt(target.dataset.qty);
-
             if (target.classList.contains('btn-edit')) {
                 document.getElementById('itemName').value = name;
                 document.getElementById('itemQty').value = qty;
@@ -623,122 +536,72 @@
             } else if (target.classList.contains('btn-delete')) {
                 deleteItem(id, name, qty);
             }
-        });
+        };
+        inventoryTable.addEventListener('click', handleItemAction);
+        inventoryGrid.addEventListener('click', handleItemAction);
 
         async function deleteItem(id, name, qty) {
-            showModal({
-                type: 'delete',
-                title: 'Hapus Item?',
-                message: `Hapus permanen "${name}"?`,
-                useInput: true,
-                onConfirm: async (picValue) => {
-                    try {
-                        await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue);
-                        await deleteDoc(doc(db, "items", id));
-                        showModal({ type: 'success', title: 'Dihapus', message: 'Item berhasil dihapus.' });
-                    } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); }
-                }
-            });
+            showModal({ type: 'delete', title: 'Hapus Item?', message: `Hapus permanen "${name}"?`, useInput: true, onConfirm: async (picValue) => { try { await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue); await deleteDoc(doc(db, "items", id)); showModal({ type: 'success', title: 'Dihapus', message: 'Item berhasil dihapus.' }); } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } } });
         }
+        document.getElementById('btnClearLogs').addEventListener('click', () => { showModal({ type: 'delete', title: 'Hapus Log?', message: 'Hapus SEMUA riwayat log?', useInput: true, onConfirm: async (picValue) => { try { const snap = await getDocs(collection(db, "logs")); if (snap.empty) return showModal({type:'error', title:'Info', message:'Log kosong.'}); const batch = writeBatch(db); snap.forEach(d => batch.delete(d.ref)); await batch.commit(); showModal({type:'success', title:'Bersih', message:'Semua log dihapus.'}); addLog("SYSTEM", 0, "RESET LOGS", 0, "SYSTEM", picValue); } catch(e) { showModal({type:'error', title:'Gagal', message:e.message}); } } }); });
+        async function addLog(name, prev, change, after, type, pic, note = "") { await addDoc(collection(db, "logs"), { name, prev, change, after, type, pic, note, timestamp: serverTimestamp() }); }
 
-        document.getElementById('btnClearLogs').addEventListener('click', () => {
-            showModal({
-                type: 'delete',
-                title: 'Hapus Log?',
-                message: 'Hapus SEMUA riwayat log? Tidak bisa dikembalikan.',
-                useInput: true,
-                onConfirm: async (picValue) => {
-                    try {
-                        const snap = await getDocs(collection(db, "logs"));
-                        if (snap.empty) return showModal({type:'error', title:'Info', message:'Log kosong.'});
-                        const batch = writeBatch(db);
-                        snap.forEach(d => batch.delete(d.ref));
-                        await batch.commit();
-                        showModal({type:'success', title:'Bersih', message:'Semua log dihapus.'});
-                        addLog("SYSTEM", 0, "RESET LOGS", 0, "SYSTEM", picValue);
-                    } catch(e) { showModal({type:'error', title:'Gagal', message:e.message}); }
-                }
-            })
-        });
-
-        async function addLog(name, prev, change, after, type, pic, note = "") {
-            await addDoc(collection(db, "logs"), { name, prev, change, after, type, pic, note, timestamp: serverTimestamp() });
-        }
-
-        // --- UI HELPERS ---
-        function showError(msg) { errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`; errorBanner.classList.remove('hidden'); }
-        function hideError() { errorBanner.classList.add('hidden'); }
+        // --- RENDER FUNCTIONS ---
         function renderRow(id, item, tbody) {
             const row = document.createElement('tr');
             row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800';
-            row.innerHTML = `
-                <td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td>
-                <td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td>
-                <td class="p-4 text-right"><div class="flex justify-end gap-2">
-                    <button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button>
-                    <button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button>
-                </div></td>`;
+            row.innerHTML = `<td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td><td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td><td class="p-4 text-right"><div class="flex justify-end gap-2"><button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button><button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button></div></td>`;
             tbody.appendChild(row);
         }
-        
+
+        function renderGridCard(id, item, container) {
+            const icon = getIconForName(item.name);
+            const card = document.createElement('div');
+            card.className = 'bg-cartel-panel border border-cartel-border rounded-lg p-4 shadow-lg hover:border-cartel-gold/50 transition relative overflow-hidden group';
+            card.innerHTML = `
+                <div class="absolute top-[-10px] right-[-10px] text-6xl text-white opacity-5 pointer-events-none rotate-12 group-hover:opacity-10 transition"><i class="fa-solid ${icon}"></i></div>
+                <div class="flex justify-between items-start mb-2 relative z-10">
+                    <div class="w-10 h-10 rounded-full bg-black border border-cartel-border flex items-center justify-center text-cartel-gold text-lg"><i class="fa-solid ${icon}"></i></div>
+                    <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button class="btn-edit text-xs bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-300 px-2 py-1 rounded" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button>
+                        <button class="btn-delete text-xs bg-gray-800 hover:bg-red-900 hover:text-white text-red-500 px-2 py-1 rounded" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </div>
+                <h3 class="font-bold text-white text-sm truncate mb-1 relative z-10">${item.name}</h3>
+                <div class="text-right border-t border-gray-800 pt-2 relative z-10">
+                    <span class="text-xs text-gray-500 block uppercase">Stok Saat Ini</span>
+                    <span class="font-mono text-xl text-cartel-gold font-bold">${parseInt(item.qty).toLocaleString('id-ID')}</span>
+                </div>
+            `;
+            container.appendChild(card);
+        }
+
         function renderLogCard(id, log, container, isCraftingView = false) {
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
             let changeClass = "text-cartel-gold";
             if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
             else if (String(log.change).includes('+')) changeClass = "text-green-500";
             
-            // Build Detailed Ingredient Table if Crafting View & Data exists
             let detailsHTML = '';
             if (isCraftingView && log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
-                let rows = log.ingredientsSnapshot.map(ing => `
-                    <tr class="border-b border-gray-800 last:border-0 text-[10px]">
-                        <td class="py-1 text-gray-400">${ing.name}</td>
-                        <td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td>
-                        <td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td>
-                    </tr>
-                `).join('');
-                
-                detailsHTML = `
-                    <div class="mt-3 bg-black/40 rounded p-2 border border-gray-800">
-                        <table class="w-full">
-                            <thead>
-                                <tr class="text-[9px] text-gray-600 border-b border-gray-700">
-                                    <th class="text-left pb-1">BAHAN</th>
-                                    <th class="text-center pb-1">PAKAI</th>
-                                    <th class="text-right pb-1">STOCK LOG</th>
-                                </tr>
-                            </thead>
-                            <tbody>${rows}</tbody>
-                        </table>
-                    </div>
-                `;
+                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td></tr>`).join('');
+                detailsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
             }
-
-            // Note display
             let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
 
             const html = `
                 <div class="fade-in mb-6 relative group">
-                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button>
-                    </div>
+                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
                     <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
-                        <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800">
-                            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div>
-                            <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
-                        </div>
+                        <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
                         <div class="p-5 relative z-10 bg-[#121212]">
                             <div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div>
-                            
                             <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
                                 <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div>
                                 <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono ${changeClass} font-bold text-lg">${log.change}</div></div>
                                 <div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div>
                             </div>
-
-                            ${detailsHTML}
-                            ${noteHTML}
-
+                            ${detailsHTML} ${noteHTML}
                             <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div>
                         </div>
                         <div class="h-1.5 w-full ${log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':'bg-cartel-gold')}"></div>
@@ -747,7 +610,7 @@
             container.insertAdjacentHTML('beforeend', html);
         }
 
-        // Modal Logic & Capture Report (Same as before)
+        // Modal Logic
         window.showModal = function({ type, title, message, useInput, onConfirm }) {
             document.getElementById('modalInput').value = '';
             document.getElementById('modalInputContainer').className = useInput ? 'mb-6' : 'hidden';
@@ -755,38 +618,29 @@
             document.getElementById('modalTitle').innerText = title;
             document.getElementById('modalMessage').innerText = message;
             modalConfirmCallback = onConfirm;
-            
             modalIcon.innerHTML = type === 'success' ? '<i class="fa-solid fa-circle-check text-green-500"></i>' : (type === 'error' ? '<i class="fa-solid fa-circle-exclamation text-red-500"></i>' : '<i class="fa-solid fa-triangle-exclamation text-cartel-gold"></i>');
             btnModalConfirm.className = `px-6 py-2 rounded font-bold transition shadow-lg uppercase tracking-wider ${type === 'delete' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-cartel-gold text-black hover:bg-yellow-500'}`;
             btnModalConfirm.innerText = type.includes('confirm') ? 'Proses' : (type === 'delete' ? 'Musnahkan' : 'OK');
-
             modalBackdrop.classList.remove('hidden');
             setTimeout(() => { modalBackdrop.classList.remove('opacity-0'); document.getElementById('modalCard').classList.remove('scale-95'); document.getElementById('modalCard').classList.add('scale-100'); }, 10);
         }
-        window.closeModal = function() {
-            modalBackdrop.classList.add('opacity-0'); document.getElementById('modalCard').classList.remove('scale-100'); document.getElementById('modalCard').classList.add('scale-95');
-            setTimeout(() => { modalBackdrop.classList.add('hidden'); }, 300); modalConfirmCallback = null;
-        }
+        window.closeModal = function() { modalBackdrop.classList.add('opacity-0'); document.getElementById('modalCard').classList.remove('scale-100'); document.getElementById('modalCard').classList.add('scale-95'); setTimeout(() => { modalBackdrop.classList.add('hidden'); }, 300); modalConfirmCallback = null; }
         btnModalCancel.addEventListener('click', closeModal);
-        btnModalConfirm.addEventListener('click', () => {
-            if (modalConfirmCallback) {
-                const val = document.getElementById('modalInput').value.trim();
-                if (!document.getElementById('modalInputContainer').classList.contains('hidden') && !val) return;
-                modalConfirmCallback(val);
-            }
-            closeModal();
-        });
+        btnModalConfirm.addEventListener('click', () => { if (modalConfirmCallback) { const val = document.getElementById('modalInput').value.trim(); if (!document.getElementById('modalInputContainer').classList.contains('hidden') && !val) return; modalConfirmCallback(val); } closeModal(); });
         
+        // FIX: Use Blob instead of Base64 for large images to prevent corruption
         window.captureReport = function(elementId) {
             const element = document.getElementById(elementId);
             if(!element) return;
-            // Reduced scale to 2.0 to prevent large file corruption
             html2canvas(element, { scale: 2, backgroundColor: '#121212', useCORS: true }).then(canvas => {
-                const link = document.createElement('a'); 
-                link.download = `Vikrama_Log_${Date.now()}.png`; 
-                // Using standard data URL call
-                link.href = canvas.toDataURL("image/png"); 
-                link.click();
+                canvas.toBlob(function(blob) {
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.download = `Vikrama_Log_${Date.now()}.png`;
+                    link.href = url;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                });
             });
         }
     </script>
@@ -868,8 +722,31 @@
                 </section>
                 <section class="lg:col-span-7 h-full">
                     <div class="bg-cartel-panel rounded-lg border border-cartel-border shadow-lg overflow-hidden flex flex-col h-full min-h-[600px]">
-                        <div class="p-5 border-b border-cartel-border flex justify-between items-center bg-[#151515]"><h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2"><i class="fa-solid fa-database"></i> Database Cartel</h2><div class="bg-cartel-gold text-black px-3 py-1 rounded text-xs font-bold shadow-lg">Items: <span id="totalItems">0</span></div></div>
-                        <div class="overflow-x-auto flex-grow"><table class="w-full text-left border-collapse"><thead><tr class="bg-[#121212] text-xs text-gray-500 uppercase tracking-wider border-b border-cartel-border"><th class="p-4 font-medium">Nama Barang</th><th class="p-4 font-medium text-center">Jumlah</th><th class="p-4 font-medium text-right">Aksi</th></tr></thead><tbody id="inventoryTable" class="text-sm divide-y divide-gray-800"></tbody></table></div>
+                        <div class="p-5 border-b border-cartel-border flex justify-between items-center bg-[#151515]">
+                            <h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2"><i class="fa-solid fa-database"></i> Database Cartel</h2>
+                            <div class="flex gap-3 items-center">
+                                <!-- VIEW TOGGLE -->
+                                <div class="bg-black border border-cartel-border rounded flex p-0.5">
+                                    <button id="btnViewList" onclick="switchView('list')" class="px-2 py-1 text-xs rounded bg-gray-800 text-cartel-gold transition hover:text-white" title="List View"><i class="fa-solid fa-list"></i></button>
+                                    <button id="btnViewGrid" onclick="switchView('grid')" class="px-2 py-1 text-xs rounded text-gray-500 transition hover:text-white" title="Grid View"><i class="fa-solid fa-border-all"></i></button>
+                                </div>
+                                <div class="bg-cartel-gold text-black px-3 py-1 rounded text-xs font-bold shadow-lg">Items: <span id="totalItems">0</span></div>
+                            </div>
+                        </div>
+                        
+                        <!-- List View -->
+                        <div class="overflow-x-auto flex-grow">
+                            <table class="w-full text-left border-collapse">
+                                <thead><tr class="bg-[#121212] text-xs text-gray-500 uppercase tracking-wider border-b border-cartel-border"><th class="p-4 font-medium">Nama Barang</th><th class="p-4 font-medium text-center">Jumlah</th><th class="p-4 font-medium text-right">Aksi</th></tr></thead>
+                                <tbody id="inventoryTable" class="text-sm divide-y divide-gray-800"></tbody>
+                            </table>
+                        </div>
+
+                        <!-- Grid View (Hidden by Default) -->
+                        <div id="inventoryGrid" class="hidden flex-grow overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 gap-4 content-start">
+                            <!-- Cards Injected JS -->
+                        </div>
+
                         <div id="emptyTableState" class="hidden flex-col items-center justify-center h-64 text-gray-600"><i class="fa-solid fa-cloud text-5xl mb-4 opacity-20"></i><p class="text-sm">Database Kosong / Loading...</p></div>
                     </div>
                 </section>
