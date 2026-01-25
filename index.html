@@ -13,7 +13,7 @@
     <!-- Html2Canvas -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
-    <!-- FIREBASE SDK (Updated to 11.6.1 for stability) -->
+    <!-- FIREBASE SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
@@ -21,7 +21,6 @@
             doc, deleteDoc, updateDoc, query, orderBy, serverTimestamp,
             getDocs, where, writeBatch, getDoc, setDoc 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        // IMPORT AUTHENTICATION (PENTING UNTUK FIX PERMISSION ERROR)
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         // CONFIG FIREBASE
@@ -34,27 +33,22 @@
             appId: "1:168105589094:web:aee3dc7232c7246b5570a7"
         };
 
-        // Inisialisasi Variables
-        let db;
-        let auth;
-        let currentUser = null;
-        let systemPin = "1234"; // Default PIN sementara sebelum fetch DB
+        // Variables
+        let db, auth, currentUser = null;
+        let systemPin = "1234";
+        let inventoryCache = {}; 
+        let recipes = []; // Dynamic Recipes
 
         // DOM Elements
         const statusEl = document.getElementById('date'); 
-        const tableBody = document.getElementById('inventoryTable');
-        const historyContainer = document.getElementById('reportHistoryContainer');
-        const emptyTable = document.getElementById('emptyTableState');
-        const emptyReport = document.getElementById('emptyReportState');
-        const totalLabel = document.getElementById('totalItems');
-        const datalist = document.getElementById('itemList');
         const form = document.getElementById('inventoryForm');
         const errorBanner = document.getElementById('errorBanner');
-        const btnClearLogs = document.getElementById('btnClearLogs');
-        const mainApp = document.getElementById('mainApp');
-        const lockScreen = document.getElementById('lockScreen');
-        const pinInput = document.getElementById('pinInput');
-        const loginStatus = document.getElementById('loginStatus');
+        
+        // Views
+        const viewInventory = document.getElementById('view-inventory');
+        const viewCrafting = document.getElementById('view-crafting');
+        const tabInventory = document.getElementById('tab-inventory');
+        const tabCrafting = document.getElementById('tab-crafting');
 
         // Modal Elements
         const modalBackdrop = document.getElementById('modalBackdrop');
@@ -65,35 +59,37 @@
         const modalInput = document.getElementById('modalInput');
         const btnModalCancel = document.getElementById('btnModalCancel');
         const btnModalConfirm = document.getElementById('btnModalConfirm');
-
-        // State Global untuk Modal Callback
         let modalConfirmCallback = null;
 
-        // === 1. SYSTEM INITIALIZATION ===
+        // Recipe Form Elements
+        const recipeFormContainer = document.getElementById('recipeFormContainer');
+        const btnOpenRecipeForm = document.getElementById('btnOpenRecipeForm');
+        const btnCloseRecipeForm = document.getElementById('btnCloseRecipeForm');
+        const recipeForm = document.getElementById('recipeForm');
+        const ingredientsListContainer = document.getElementById('ingredientsListContainer');
+        const btnAddIngredient = document.getElementById('btnAddIngredient');
+
+        // --- 1. INITIALIZATION ---
         async function initSystem() {
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
                 statusEl.innerText = "Authenticating...";
                 statusEl.className = "text-xs text-yellow-500 font-bold uppercase animate-pulse";
-
                 await signInAnonymously(auth);
-
             } catch (e) {
                 console.error("Init Error:", e);
                 if (e.code === 'auth/configuration-not-found' || e.code === 'auth/operation-not-allowed') {
-                    showError("⚠️ SETUP DIPERLUKAN: Authentication belum aktif. Buka Firebase Console > Authentication > Sign-in method > Aktifkan 'Anonymous'.");
+                    showError("⚠️ SETUP ERROR: Auth belum aktif. Cek Firebase Console.");
                     statusEl.innerText = "AUTH FAILED";
                     statusEl.className = "text-xs text-red-500 font-bold uppercase";
                 } else {
-                    showError("Gagal Inisialisasi: " + e.message);
+                    showError("Init Gagal: " + e.message);
                 }
             }
         }
 
-        // === 2. AUTH STATE LISTENER & PIN FETCH ===
         initSystem().then(() => {
             if (auth) {
                 onAuthStateChanged(auth, async (user) => {
@@ -101,20 +97,13 @@
                         currentUser = user;
                         statusEl.innerText = "SYSTEM ONLINE";
                         statusEl.className = "text-xs text-green-500 font-bold uppercase";
-                        console.log("User Logged In:", user.uid);
                         hideError(); 
-                        
-                        // FETCH PIN FROM DB
                         await fetchSystemPin();
-
-                        // Enable Login Button UI
-                        loginStatus.innerText = "System Connected. Masukkan PIN.";
-                        loginStatus.className = "text-center text-xs text-green-500 font-mono mt-2";
-                        
+                        document.getElementById('loginStatus').innerText = "System Connected. Masukkan PIN.";
+                        document.getElementById('loginStatus').className = "text-center text-xs text-green-500 font-mono mt-2";
                     } else {
                         statusEl.innerText = "DISCONNECTED";
                         statusEl.className = "text-xs text-red-500 font-bold uppercase";
-                        loginStatus.innerText = "Menunggu Koneksi...";
                     }
                 });
             }
@@ -124,73 +113,75 @@
             try {
                 const pinDocRef = doc(db, "settings", "access");
                 const pinSnap = await getDoc(pinDocRef);
-
-                if (pinSnap.exists()) {
-                    systemPin = pinSnap.data().pin;
-                    console.log("Security Config Loaded.");
-                } else {
-                    // Jika belum ada, buat default 1234
-                    await setDoc(pinDocRef, { pin: "1234" });
-                    systemPin = "1234";
-                    console.log("Default Security Created.");
-                }
-            } catch (e) {
-                console.error("Gagal load PIN:", e);
-                loginStatus.innerText = "Gagal memuat config keamanan.";
-                loginStatus.className = "text-center text-xs text-red-500 mt-2";
-            }
+                if (pinSnap.exists()) systemPin = pinSnap.data().pin;
+                else { await setDoc(pinDocRef, { pin: "1234" }); systemPin = "1234"; }
+            } catch (e) { console.error("PIN Error:", e); }
         }
 
-        // === 3. PIN LOGIC ===
+        // --- 2. PIN LOGIC ---
         window.checkPin = function() {
-            const input = pinInput.value;
+            const input = document.getElementById('pinInput').value;
             const btn = document.getElementById('btnLogin');
-            
             if (input === systemPin) {
-                // SUCCESS
                 btn.innerHTML = '<i class="fa-solid fa-check"></i> AKSES DITERIMA';
-                btn.classList.remove('bg-cartel-gold');
-                btn.classList.add('bg-green-500', 'text-white');
-                
+                btn.classList.replace('bg-cartel-gold', 'bg-green-500');
+                btn.classList.add('text-white');
                 setTimeout(() => {
-                    lockScreen.classList.add('opacity-0', 'pointer-events-none');
-                    mainApp.classList.remove('hidden');
-                    // Delay sedikit agar transisi smooth
+                    document.getElementById('lockScreen').classList.add('opacity-0', 'pointer-events-none');
+                    document.getElementById('mainApp').classList.remove('hidden');
                     setTimeout(() => {
-                        mainApp.classList.remove('opacity-0');
-                        startDatabaseListeners(); // Start loading data only after unlock
+                        document.getElementById('mainApp').classList.remove('opacity-0');
+                        startDatabaseListeners();
                     }, 100);
                 }, 800);
             } else {
-                // FAILED
                 btn.classList.add('animate-shake', 'bg-red-600', 'text-white');
                 btn.innerHTML = '<i class="fa-solid fa-xmark"></i> PIN SALAH';
-                pinInput.value = '';
-                
+                document.getElementById('pinInput').value = '';
                 setTimeout(() => {
                     btn.classList.remove('animate-shake', 'bg-red-600', 'text-white');
-                    btn.classList.add('bg-cartel-gold', 'text-black');
+                    btn.classList.add('bg-cartel-gold');
                     btn.innerHTML = '<i class="fa-solid fa-fingerprint"></i> Akses System';
-                    pinInput.focus();
                 }, 1000);
             }
         }
+        document.getElementById('pinInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') checkPin(); });
 
-        // Enter key for PIN
-        pinInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') checkPin();
-        });
+        // --- 3. NAVIGATION TABS ---
+        window.switchTab = function(tab) {
+            if (tab === 'inventory') {
+                viewInventory.classList.remove('hidden');
+                viewCrafting.classList.add('hidden');
+                tabInventory.classList.add('bg-cartel-gold', 'text-black');
+                tabInventory.classList.remove('text-gray-400', 'hover:text-white');
+                tabCrafting.classList.remove('bg-cartel-gold', 'text-black');
+                tabCrafting.classList.add('text-gray-400', 'hover:text-white');
+            } else {
+                viewInventory.classList.add('hidden');
+                viewCrafting.classList.remove('hidden');
+                tabCrafting.classList.add('bg-cartel-gold', 'text-black');
+                tabCrafting.classList.remove('text-gray-400', 'hover:text-white');
+                tabInventory.classList.remove('bg-cartel-gold', 'text-black');
+                tabInventory.classList.add('text-gray-400', 'hover:text-white');
+                updateCraftingUI(); // Refresh UI when switching
+            }
+        }
 
-
-        // === 4. DATABASE LISTENERS ===
+        // --- 4. DATABASE LISTENERS ---
         function startDatabaseListeners() {
             if (!db) return;
 
-            // A. Listener Items
+            // ITEMS LISTENER
             const qItems = query(collection(db, "items"), orderBy("name"));
             onSnapshot(qItems, (snapshot) => {
+                const tableBody = document.getElementById('inventoryTable');
+                const datalist = document.getElementById('itemList');
+                const emptyTable = document.getElementById('emptyTableState');
+                const totalLabel = document.getElementById('totalItems');
+                
                 tableBody.innerHTML = '';
                 datalist.innerHTML = '';
+                inventoryCache = {}; // Reset Cache
                 let count = 0;
 
                 if (snapshot.empty) {
@@ -199,219 +190,425 @@
                     emptyTable.style.display = 'none';
                     snapshot.forEach((docSnap) => {
                         const item = docSnap.data();
-                        renderRow(docSnap.id, item);
-                        renderOption(item.name);
+                        
+                        // Save to Cache for Crafting Logic
+                        inventoryCache[item.name.toLowerCase()] = {
+                            id: docSnap.id,
+                            name: item.name, 
+                            qty: parseInt(item.qty) || 0
+                        };
+
+                        renderRow(docSnap.id, item, tableBody);
+                        
+                        const opt = document.createElement('option');
+                        opt.value = item.name;
+                        datalist.appendChild(opt);
                         count++;
                     });
                 }
                 totalLabel.innerText = count;
+                
+                if (!viewCrafting.classList.contains('hidden')) updateCraftingUI();
+
             }, (error) => {
-                if (error.code === 'permission-denied') {
-                    showError("⛔ AKSES DITOLAK: Security Rules Firebase memblokir akses.");
-                } else {
-                    showError("DB Error: " + error.message);
-                }
+                if (error.code === 'permission-denied') showError("⛔ AKSES DITOLAK: Security Rules Blocked.");
+                else showError("DB Error: " + error.message);
             });
 
-            // B. Listener Logs
+            // LOGS LISTENER
             const qLogs = query(collection(db, "logs"), orderBy("timestamp", "desc"));
             onSnapshot(qLogs, (snapshot) => {
-                historyContainer.innerHTML = ''; 
-                if (snapshot.empty) {
-                    emptyReport.style.display = 'block';
-                } else {
-                    emptyReport.style.display = 'none';
-                    snapshot.forEach((docSnap) => {
-                        renderLogCard(docSnap.id, docSnap.data());
+                const invLogContainer = document.getElementById('reportHistoryContainer');
+                const craftLogContainer = document.getElementById('craftingHistoryContainer');
+                
+                invLogContainer.innerHTML = ''; 
+                craftLogContainer.innerHTML = '';
+
+                snapshot.forEach((docSnap) => {
+                    const log = docSnap.data();
+                    // Render basic log for inventory page
+                    renderLogCard(docSnap.id, log, invLogContainer);
+                    
+                    // Render detailed log for crafting page
+                    if (log.type === 'CRAFTING') renderLogCard(docSnap.id, log, craftLogContainer, true);
+                });
+            });
+
+            // RECIPES LISTENER
+            const qRecipes = query(collection(db, "recipes"), orderBy("name"));
+            onSnapshot(qRecipes, (snapshot) => {
+                recipes = [];
+                snapshot.forEach(docSnap => {
+                    recipes.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                
+                updateCraftingUI();
+            });
+        }
+
+        // --- 5. RECIPE & CRAFTING LOGIC ---
+        
+        // UI Render
+        function updateCraftingUI() {
+            const container = document.getElementById('recipeContainer');
+            container.innerHTML = '';
+
+            if (recipes.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-sm col-span-2 text-center py-10">Belum ada resep. Klik "Buat Resep Baru".</div>';
+                return;
+            }
+
+            recipes.forEach(recipe => {
+                // Generate Ingredients HTML based on cache
+                let ingredientHTML = '';
+                
+                recipe.ingredients.forEach(ing => {
+                    const stockItem = inventoryCache[ing.name.toLowerCase()];
+                    const currentQty = stockItem ? stockItem.qty : 0;
+                    
+                    ingredientHTML += `
+                        <div class="flex justify-between text-xs mb-1 border-b border-gray-800 pb-1 last:border-0">
+                            <span class="text-gray-400">
+                                ${ing.name} (x${ing.qty})
+                            </span>
+                            <span class="${currentQty >= ing.qty ? 'text-green-500' : 'text-red-500'} font-mono">
+                                Stok: ${currentQty}
+                            </span>
+                        </div>
+                    `;
+                });
+
+                const card = document.createElement('div');
+                card.className = `bg-cartel-panel border border-cartel-border hover:border-cartel-gold/30 rounded-lg p-5 shadow-lg relative overflow-hidden group transition`;
+                card.innerHTML = `
+                    <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                        <button onclick="editRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-gray-300 px-2 py-1 rounded hover:bg-cartel-gold hover:text-black"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="deleteRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-red-500 px-2 py-1 rounded hover:bg-red-900 hover:text-white"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    
+                    <h3 class="text-lg font-bold text-cartel-gold mb-1 truncate pr-16">${recipe.name}</h3>
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">
+                        Output: <span class="text-white">${recipe.outputQty}x ${recipe.outputName}</span>
+                    </p>
+                    
+                    <div class="bg-black/50 p-3 rounded mb-4 border border-gray-800 min-h-[60px]">
+                        ${ingredientHTML}
+                    </div>
+
+                    <div class="flex gap-2 items-center">
+                        <div class="relative w-20">
+                            <input type="number" id="qty-${recipe.id}" min="1" value="1" 
+                                class="w-full bg-black border border-cartel-border text-center text-white text-sm py-2 rounded focus:border-cartel-gold font-mono">
+                            <span class="absolute -top-2 left-1 text-[9px] bg-cartel-panel px-1 text-gray-500">Jumlah</span>
+                        </div>
+                        <button onclick="processCraft('${recipe.id}')" 
+                            class="flex-grow py-2 rounded font-bold text-sm uppercase tracking-wider transition shadow-lg bg-cartel-gold text-black hover:bg-yellow-500">
+                            <i class="fa-solid fa-hammer mr-2"></i> CRAFT
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Logic Process Craft
+        window.processCraft = function(recipeId) {
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+
+            const recipe = recipes.find(r => r.id === recipeId);
+            if (!recipe) return;
+
+            const craftQtyInput = document.getElementById(`qty-${recipeId}`);
+            const craftMultiplier = parseInt(craftQtyInput.value) || 1;
+
+            if (craftMultiplier < 1) return showModal({ type: 'error', title: 'Error', message: 'Jumlah tidak valid.' });
+
+            // Check Stock first (Client side check)
+            let missingIngredients = [];
+            recipe.ingredients.forEach(ing => {
+                const requiredTotal = ing.qty * craftMultiplier;
+                const stockItem = inventoryCache[ing.name.toLowerCase()];
+                const currentQty = stockItem ? stockItem.qty : 0;
+                if (currentQty < requiredTotal) {
+                    missingIngredients.push(`${ing.name} (Kurang: ${requiredTotal - currentQty})`);
+                }
+            });
+
+            if (missingIngredients.length > 0) {
+                return showModal({ 
+                    type: 'error', 
+                    title: 'Bahan Tidak Cukup', 
+                    message: `Gagal membuat ${craftMultiplier} paket. \n${missingIngredients.join(', ')}` 
+                });
+            }
+
+            // Confirm
+            showModal({
+                type: 'confirm',
+                title: 'Konfirmasi Crafting',
+                message: `Membuat ${craftMultiplier}x ${recipe.name} (${craftMultiplier * recipe.outputQty} ${recipe.outputName}). \nStok bahan akan dikurangi otomatis.`,
+                useInput: true,
+                onConfirm: async (picValue) => {
+                    if (!picValue) return showModal({type:'error', title:'Error', message:'Nama PIC Wajib diisi'});
+
+                    const batch = writeBatch(db);
+                    let ingredientsSnapshot = []; // To store log details
+                    
+                    // 1. Deduct Ingredients
+                    for (const ing of recipe.ingredients) {
+                        const itemKey = ing.name.toLowerCase();
+                        const stockItem = inventoryCache[itemKey];
+                        const requiredTotal = ing.qty * craftMultiplier;
+                        
+                        if (!stockItem || stockItem.qty < requiredTotal) {
+                            showModal({ type: 'error', title: 'Gagal', message: `Stok ${ing.name} berubah dan tidak cukup.` });
+                            return;
+                        }
+                        
+                        const newStock = stockItem.qty - requiredTotal;
+                        batch.update(doc(db, "items", stockItem.id), { qty: newStock });
+
+                        // Capture snapshot for logging
+                        ingredientsSnapshot.push({
+                            name: ing.name,
+                            used: requiredTotal,
+                            before: stockItem.qty,
+                            after: newStock
+                        });
+                    }
+
+                    // 2. Add Output Product
+                    const outputKey = recipe.outputName.toLowerCase();
+                    const outputTotal = recipe.outputQty * craftMultiplier;
+                    const existingOutput = inventoryCache[outputKey];
+                    
+                    if (existingOutput) {
+                        batch.update(doc(db, "items", existingOutput.id), { qty: existingOutput.qty + outputTotal });
+                    } else {
+                        const newDocRef = doc(collection(db, "items"));
+                        batch.set(newDocRef, {
+                            name: recipe.outputName.toUpperCase(),
+                            qty: outputTotal,
+                            created_at: serverTimestamp()
+                        });
+                    }
+
+                    // 3. Log with Detailed Ingredients
+                    const logRef = doc(collection(db, "logs"));
+                    batch.set(logRef, {
+                        name: recipe.outputName.toUpperCase(),
+                        prev: "BAHAN",
+                        change: `+ ${outputTotal} (CRAFT x${craftMultiplier})`,
+                        after: "PRODUK JADI",
+                        type: "CRAFTING",
+                        pic: picValue,
+                        ingredientsSnapshot: ingredientsSnapshot, // Save detailed array
+                        timestamp: serverTimestamp()
                     });
+
+                    try {
+                        await batch.commit();
+                        showModal({ type: 'success', title: 'Crafting Berhasil', message: `${craftMultiplier}x ${recipe.name} berhasil diproduksi.` });
+                        craftQtyInput.value = 1; 
+                    } catch (e) {
+                        showModal({ type: 'error', title: 'Error DB', message: e.message });
+                    }
                 }
             });
         }
 
-        // === 5. MODAL SYSTEM ===
+        // --- 6. RECIPE MANAGEMENT (DYNAMIC INGREDIENTS) ---
         
-        window.showModal = function({ type, title, message, useInput, onConfirm }) {
-            // Reset State
-            modalInput.value = '';
-            modalInputContainer.classList.add('hidden');
-            btnModalCancel.classList.add('hidden');
-            btnModalConfirm.classList.remove('bg-red-600', 'hover:bg-red-700', 'bg-cartel-gold', 'hover:bg-yellow-500');
-            modalIcon.className = 'text-4xl text-center mb-4';
+        // Helper to add ingredient row
+        window.addIngredientRow = function(name = '', qty = 1) {
+            const div = document.createElement('div');
+            div.className = 'flex gap-2 mb-2 items-center ingredient-row';
+            div.innerHTML = `
+                <input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" placeholder="NAMA BAHAN" value="${name}" required>
+                <input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}" min="1" required>
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 px-2"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            ingredientsListContainer.appendChild(div);
+        }
+
+        // Open Form (Create Mode)
+        btnOpenRecipeForm.addEventListener('click', () => {
+            document.getElementById('recipeId').value = '';
+            document.getElementById('recipeName').value = '';
+            document.getElementById('recOutName').value = '';
+            document.getElementById('recOutQty').value = 1;
+            document.getElementById('formTitle').innerText = 'Buat Resep Baru';
             
-            // Set Content
-            modalTitle.innerText = title;
-            modalMessage.innerText = message;
-            modalConfirmCallback = onConfirm;
+            // Clear and add 1 empty row
+            ingredientsListContainer.innerHTML = '';
+            addIngredientRow(); 
+            
+            recipeFormContainer.classList.remove('hidden');
+            recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
+        });
 
-            // Configure based on Type
-            if (type === 'error') {
-                modalIcon.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i>';
-                modalIcon.classList.add('text-red-500');
-                btnModalConfirm.innerText = "Tutup";
-                btnModalConfirm.classList.add('bg-gray-700', 'hover:bg-gray-600', 'text-white');
-            } else if (type === 'success') {
-                modalIcon.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
-                modalIcon.classList.add('text-green-500');
-                btnModalConfirm.innerText = "OK";
-                btnModalConfirm.classList.add('bg-cartel-gold', 'text-black', 'hover:bg-yellow-500');
-            } else if (type === 'confirm' || type === 'delete') {
-                modalIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
-                modalIcon.classList.add(type === 'delete' ? 'text-red-500' : 'text-cartel-gold');
-                
-                btnModalCancel.classList.remove('hidden');
-                btnModalConfirm.innerText = type === 'delete' ? "Musnahkan" : "Ya, Lanjutkan";
-                
-                if (type === 'delete') {
-                    btnModalConfirm.classList.add('bg-red-600', 'text-white', 'hover:bg-red-700');
-                } else {
-                    btnModalConfirm.classList.add('bg-cartel-gold', 'text-black', 'hover:bg-yellow-500');
-                }
+        // Add Ingredient Button
+        btnAddIngredient.addEventListener('click', () => {
+            addIngredientRow();
+        });
 
-                if (useInput) {
-                    modalInputContainer.classList.remove('hidden');
-                    // Auto focus input when modal shows
-                    setTimeout(() => modalInput.focus(), 100);
+        btnCloseRecipeForm.addEventListener('click', () => {
+            recipeFormContainer.classList.add('hidden');
+        });
+
+        // Save Recipe
+        recipeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "System offline." });
+
+            const id = document.getElementById('recipeId').value;
+            const name = document.getElementById('recipeName').value.trim().toUpperCase();
+            const outName = document.getElementById('recOutName').value.trim().toUpperCase();
+            const outQty = parseInt(document.getElementById('recOutQty').value);
+            
+            // Gather ingredients
+            const ingRows = document.querySelectorAll('.ingredient-row');
+            let ingredients = [];
+            
+            ingRows.forEach(row => {
+                const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase();
+                const iQty = parseInt(row.querySelector('.rec-ing-qty').value);
+                if (iName && iQty > 0) {
+                    ingredients.push({ name: iName, qty: iQty });
                 }
+            });
+
+            if(!name || !outName || outQty < 1 || ingredients.length === 0) {
+                return showModal({type:'error', title:'Data Kurang', message:'Nama, Output, dan minimal 1 Bahan valid wajib diisi.'});
             }
 
-            // Show Modal
-            modalBackdrop.classList.remove('hidden');
-            // Small delay for transition effect
-            setTimeout(() => {
-                modalBackdrop.classList.remove('opacity-0');
-                document.getElementById('modalCard').classList.remove('scale-95');
-                document.getElementById('modalCard').classList.add('scale-100');
-            }, 10);
+            const recipeData = {
+                name: name,
+                outputName: outName,
+                outputQty: outQty,
+                ingredients: ingredients,
+                updated_at: serverTimestamp()
+            };
+
+            try {
+                if (id) {
+                    await updateDoc(doc(db, "recipes", id), recipeData);
+                    showModal({ type: 'success', title: 'Sukses', message: 'Resep diperbarui.' });
+                } else {
+                    await addDoc(collection(db, "recipes"), recipeData);
+                    showModal({ type: 'success', title: 'Sukses', message: 'Resep baru dibuat.' });
+                }
+                recipeFormContainer.classList.add('hidden');
+            } catch (e) {
+                showModal({ type: 'error', title: 'Gagal', message: e.message });
+            }
+        });
+
+        // Edit Recipe
+        window.editRecipe = function(id) {
+            const recipe = recipes.find(r => r.id === id);
+            if(!recipe) return;
+
+            document.getElementById('recipeId').value = id;
+            document.getElementById('recipeName').value = recipe.name;
+            document.getElementById('recOutName').value = recipe.outputName;
+            document.getElementById('recOutQty').value = recipe.outputQty;
+            
+            // Populate ingredients
+            ingredientsListContainer.innerHTML = '';
+            if (recipe.ingredients && recipe.ingredients.length > 0) {
+                recipe.ingredients.forEach(ing => addIngredientRow(ing.name, ing.qty));
+            } else {
+                addIngredientRow();
+            }
+
+            document.getElementById('formTitle').innerText = 'Edit Resep';
+            recipeFormContainer.classList.remove('hidden');
+            recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
         }
 
-        window.closeModal = function() {
-            modalBackdrop.classList.add('opacity-0');
-            document.getElementById('modalCard').classList.remove('scale-100');
-            document.getElementById('modalCard').classList.add('scale-95');
-            setTimeout(() => {
-                modalBackdrop.classList.add('hidden');
-            }, 300);
-            modalConfirmCallback = null;
-        }
-
-        btnModalCancel.addEventListener('click', closeModal);
-        
-        btnModalConfirm.addEventListener('click', () => {
-            if (modalConfirmCallback) {
-                if (!modalInputContainer.classList.contains('hidden')) {
-                    const val = modalInput.value.trim();
-                    if (!val) {
-                        modalInput.classList.add('ring-2', 'ring-red-500');
-                        setTimeout(() => modalInput.classList.remove('ring-2', 'ring-red-500'), 500);
-                        return;
+        window.deleteRecipe = function(id) {
+            if (!currentUser) return;
+            showModal({
+                type: 'delete',
+                title: 'Hapus Resep?',
+                message: 'Resep ini akan dihapus permanen.',
+                useInput: false,
+                onConfirm: async () => {
+                    try {
+                        await deleteDoc(doc(db, "recipes", id));
+                        showModal({ type: 'success', title: 'Terhapus', message: 'Resep dihapus.' });
+                    } catch(e) {
+                        showModal({ type: 'error', title: 'Gagal', message: e.message });
                     }
-                    modalConfirmCallback(val);
-                } else {
-                    modalConfirmCallback();
                 }
+            })
+        }
+
+        // --- 7. CORE INVENTORY LOGIC (CRUD) ---
+        document.getElementById('itemName').addEventListener('input', function() {
+            this.value = this.value.toUpperCase();
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Menunggu koneksi auth..." });
+
+            const pic = document.getElementById('picName').value.trim();
+            const name = document.getElementById('itemName').value.trim().toUpperCase(); 
+            const action = document.getElementById('actionType').value;
+            const inputQty = parseInt(document.getElementById('itemQty').value);
+            const note = document.getElementById('itemNote').value.trim(); // Capture Note
+
+            if (!pic || !name || isNaN(inputQty) || inputQty < 0) {
+                showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi data." });
+                return;
             }
-            closeModal();
+
+            const btnSubmit = form.querySelector('button[type="submit"]');
+            btnSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
+            btnSubmit.disabled = true;
+
+            try {
+                const qSearch = query(collection(db, "items"), where("name", "==", name));
+                const querySnapshot = await getDocs(qSearch);
+                let prevQty = 0, finalQty = 0, changeTxt = "", logType = "UPDATE";
+
+                if (!querySnapshot.empty) {
+                    const docRef = querySnapshot.docs[0];
+                    const currentQty = parseInt(docRef.data().qty);
+                    prevQty = currentQty;
+
+                    if (action === 'add') { finalQty = currentQty + inputQty; changeTxt = `+ ${inputQty}`; }
+                    else if (action === 'remove') {
+                        if (currentQty < inputQty) throw new Error("Stok kurang!");
+                        finalQty = currentQty - inputQty; changeTxt = `- ${inputQty}`;
+                    } else if (action === 'set') {
+                        finalQty = inputQty;
+                        const diff = inputQty - currentQty; changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`;
+                    }
+                    await updateDoc(doc(db, "items", docRef.id), { qty: finalQty });
+                } else {
+                    if (action === 'remove') throw new Error("Item baru tidak bisa dikurangi.");
+                    finalQty = inputQty; changeTxt = `New: +${inputQty}`; logType = "CREATE";
+                    await addDoc(collection(db, "items"), { name: name, qty: finalQty, created_at: serverTimestamp() });
+                }
+                
+                await addLog(name, prevQty, changeTxt, finalQty, logType, pic, note);
+                showModal({ type: 'success', title: 'Berhasil', message: `Item ${name} diperbarui.` });
+                document.getElementById('itemQty').value = 1;
+                document.getElementById('itemNote').value = ''; // Reset Note
+                document.getElementById('actionType').value = 'add';
+
+            } catch (err) {
+                showModal({ type: 'error', title: 'Gagal', message: err.message });
+            } finally {
+                btnSubmit.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database';
+                btnSubmit.disabled = false;
+            }
         });
 
-        modalBackdrop.addEventListener('click', (e) => {
-            if (e.target === modalBackdrop) closeModal();
-        });
-
-
-        // === 6. UI HELPER FUNCTIONS ===
-        function showError(msg) {
-            errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`;
-            errorBanner.classList.remove('hidden');
-        }
-
-        function hideError() {
-            errorBanner.classList.add('hidden');
-        }
-
-        function renderRow(id, item) {
-            const row = document.createElement('tr');
-            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800';
-            const qtyFormatted = parseInt(item.qty).toLocaleString('id-ID');
-
-            row.innerHTML = `
-                <td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td>
-                <td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${qtyFormatted}</td>
-                <td class="p-4 text-right">
-                    <div class="flex justify-end gap-2">
-                        <button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" 
-                            data-name="${item.name}" data-qty="${item.qty}">
-                            <i class="fa-solid fa-pen"></i> EDIT
-                        </button>
-                        <button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" 
-                            data-id="${id}" data-name="${item.name}" data-qty="${item.qty}">
-                            <i class="fa-solid fa-trash"></i>
-                        </button>
-                    </div>
-                </td>
-            `;
-            tableBody.appendChild(row);
-        }
-
-        function renderOption(name) {
-            const opt = document.createElement('option');
-            opt.value = name;
-            datalist.appendChild(opt);
-        }
-
-        function renderLogCard(id, log) {
-            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "Memproses...";
-            let changeClass = "text-cartel-gold";
-            if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
-            if (String(log.change).includes('+')) changeClass = "text-green-500";
-
-            const cardHTML = `
-                <div class="fade-in mb-6 relative group">
-                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
-                            <i class="fa-solid fa-camera"></i> Save IMG
-                        </button>
-                    </div>
-                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl relative w-full">
-                         <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800">
-                            <div class="flex items-center gap-2">
-                                <div class="w-2 h-2 rounded-full ${log.type === 'DELETED' ? 'bg-red-600' : 'bg-cartel-gold'}"></div>
-                                <span class="text-xs font-bold text-gray-400 tracking-wider">LOG RECORD</span>
-                            </div>
-                            <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
-                        </div>
-                        <div class="p-5 relative z-10 bg-[#121212]">
-                            <div class="flex justify-between items-start mb-4">
-                                <h3 class="text-xl font-bold text-white ${log.type === 'DELETED' ? 'line-through text-gray-500' : ''}">${log.name}</h3>
-                                ${log.type === 'DELETED' ? '<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>' : ''}
-                            </div>
-                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-3">
-                                <div class="p-2 text-center border-r border-gray-800">
-                                    <div class="text-[9px] text-gray-500">AWAL</div>
-                                    <div class="font-mono text-gray-400 font-bold">${log.prev}</div>
-                                </div>
-                                <div class="p-2 text-center border-r border-gray-800">
-                                    <div class="text-[9px] text-gray-500">UBAH</div>
-                                    <div class="font-mono ${changeClass} font-bold text-lg">${String(log.change).replace('Set:', '').replace('New:', '')}</div>
-                                </div>
-                                <div class="p-2 text-center">
-                                    <div class="text-[9px] text-gray-500">AKHIR</div>
-                                    <div class="font-mono text-white font-bold text-lg">${log.after}</div>
-                                </div>
-                            </div>
-                             <div class="flex justify-between items-center border-t border-gray-800 pt-2">
-                                <span class="text-[10px] text-gray-500">PIC:</span>
-                                <span class="text-xs font-bold text-cartel-gold uppercase"><i class="fa-solid fa-user-check mr-1"></i> ${log.pic || 'Unknown'}</span>
-                            </div>
-                        </div>
-                        <div class="h-1.5 w-full ${log.type === 'DELETED' ? 'bg-red-900' : 'bg-cartel-gold'}"></div>
-                    </div>
-                </div>
-            `;
-            historyContainer.insertAdjacentHTML('beforeend', cardHTML);
-        }
-
-        // === 7. EVENT HANDLERS ===
-        tableBody.addEventListener('click', (e) => {
+        document.getElementById('inventoryTable').addEventListener('click', (e) => {
             const target = e.target.closest('button');
             if (!target) return;
             const id = target.dataset.id;
@@ -419,282 +616,216 @@
             const qty = parseInt(target.dataset.qty);
 
             if (target.classList.contains('btn-edit')) {
-                prepareUpdate(name, qty);
+                document.getElementById('itemName').value = name;
+                document.getElementById('itemQty').value = qty;
+                document.getElementById('actionType').value = 'set';
+                document.getElementById('itemName').focus();
             } else if (target.classList.contains('btn-delete')) {
                 deleteItem(id, name, qty);
             }
         });
 
-        function prepareUpdate(name, qty) {
-            document.getElementById('itemName').value = name;
-            document.getElementById('itemQty').value = qty;
-            const select = document.getElementById('actionType');
-            select.value = 'set';
-            select.classList.add('ring-2', 'ring-cartel-gold');
-            document.getElementById('itemName').focus();
-        }
-
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Menunggu koneksi auth..." });
-
-            const pic = document.getElementById('picName').value.trim();
-            const name = document.getElementById('itemName').value.trim();
-            const action = document.getElementById('actionType').value;
-            const inputQty = parseInt(document.getElementById('itemQty').value);
-
-            if (!pic || !name || isNaN(inputQty) || inputQty < 0) {
-                showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi Nama PIC, Nama Barang, dan Jumlah yang valid." });
-                return;
-            }
-
-            const btnSubmit = form.querySelector('button[type="submit"]');
-            const originalBtnText = btnSubmit.innerHTML;
-            btnSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
-            btnSubmit.disabled = true;
-
-            try {
-                // Query By Name
-                const qSearch = query(collection(db, "items"), where("name", "==", name));
-                const querySnapshot = await getDocs(qSearch);
-
-                let prevQty = 0;
-                let finalQty = 0;
-                let changeTxt = "";
-                let logType = "UPDATE";
-
-                if (!querySnapshot.empty) {
-                    const docRef = querySnapshot.docs[0];
-                    const targetId = docRef.id;
-                    const currentQty = parseInt(docRef.data().qty);
-                    prevQty = currentQty;
-
-                    if (action === 'add') {
-                        finalQty = currentQty + inputQty;
-                        changeTxt = `+ ${inputQty}`;
-                    } else if (action === 'remove') {
-                        if (currentQty < inputQty) throw new Error(`Stok kurang! Sisa: ${currentQty}`);
-                        finalQty = currentQty - inputQty;
-                        changeTxt = `- ${inputQty}`;
-                    } else if (action === 'set') {
-                        finalQty = inputQty;
-                        const diff = inputQty - currentQty;
-                        changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`;
-                    }
-
-                    await updateDoc(doc(db, "items", targetId), { qty: finalQty });
-                } else {
-                    if (action === 'remove') throw new Error("Item baru tidak bisa dikurangi.");
-                    prevQty = 0;
-                    finalQty = inputQty;
-                    changeTxt = `New: +${inputQty}`;
-                    logType = "CREATE";
-
-                    await addDoc(collection(db, "items"), {
-                        name: name,
-                        qty: finalQty,
-                        created_at: serverTimestamp()
-                    });
-                }
-                await addLog(name, prevQty, changeTxt, finalQty, logType, pic);
-                
-                showModal({ 
-                    type: 'success', 
-                    title: 'Transaksi Berhasil', 
-                    message: `Item ${name} berhasil diperbarui.` 
-                });
-
-                document.getElementById('itemQty').value = 1;
-                document.getElementById('actionType').value = 'add';
-                document.getElementById('actionType').classList.remove('ring-2', 'ring-cartel-gold');
-
-            } catch (err) {
-                console.error(err);
-                if (err.code === 'permission-denied') {
-                    showModal({ type: 'error', title: 'Akses Ditolak', message: "Database terkunci. Ubah Security Rules di Firebase Console." });
-                } else {
-                    showModal({ type: 'error', title: 'Gagal', message: err.message });
-                }
-            } finally {
-                btnSubmit.innerHTML = originalBtnText;
-                btnSubmit.disabled = false;
-            }
-        });
-
-        if(btnClearLogs) {
-            btnClearLogs.addEventListener('click', () => {
-                if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
-
-                showModal({
-                    type: 'delete',
-                    title: 'Hapus SEMUA Log?',
-                    message: 'PERINGATAN: Ini akan menghapus SELURUH riwayat log transaksi secara permanen. Tindakan ini tidak dapat dikembalikan.',
-                    useInput: true, 
-                    onConfirm: async (picValue) => {
-                         try {
-                            const logsSnapshot = await getDocs(collection(db, "logs"));
-                            
-                            if (logsSnapshot.empty) {
-                                 showModal({ type: 'error', title: 'Kosong', message: "Tidak ada log untuk dihapus." });
-                                 return;
-                            }
-
-                            const batch = writeBatch(db);
-                            let count = 0;
-                            
-                            logsSnapshot.docs.forEach((doc) => {
-                                batch.delete(doc.ref);
-                                count++;
-                            });
-
-                            await batch.commit();
-                            
-                            setTimeout(() => {
-                                 showModal({ type: 'success', title: 'Log Dibersihkan', message: `${count} catatan log telah dihapus oleh ${picValue}.` });
-                                 addLog("SYSTEM", 0, "RESET ALL LOGS", 0, "SYSTEM", picValue); 
-                            }, 500);
-
-                         } catch(e) {
-                             showModal({ type: 'error', title: 'Gagal', message: e.message });
-                         }
-                    }
-                })
-            });
-        }
-
         async function deleteItem(id, name, qty) {
-            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
-
             showModal({
                 type: 'delete',
-                title: 'Konfirmasi Pemusnahan',
-                message: `Anda yakin ingin menghapus permanen item "${name}" dari database? Data tidak bisa dikembalikan.`,
+                title: 'Hapus Item?',
+                message: `Hapus permanen "${name}"?`,
                 useInput: true,
                 onConfirm: async (picValue) => {
                     try {
                         await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue);
                         await deleteDoc(doc(db, "items", id));
-                        
-                        setTimeout(() => {
-                             showModal({ type: 'success', title: 'Pemusnahan Berhasil', message: `Item ${name} telah dihapus.` });
-                        }, 500);
-                    } catch (e) {
-                        showModal({ type: 'error', title: 'Gagal', message: e.message });
-                    }
+                        showModal({ type: 'success', title: 'Dihapus', message: 'Item berhasil dihapus.' });
+                    } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); }
                 }
             });
         }
 
-        async function addLog(name, prev, change, after, type, pic) {
-            await addDoc(collection(db, "logs"), {
-                name: name, prev, change, after, type, pic,
-                timestamp: serverTimestamp()
-            });
+        document.getElementById('btnClearLogs').addEventListener('click', () => {
+            showModal({
+                type: 'delete',
+                title: 'Hapus Log?',
+                message: 'Hapus SEMUA riwayat log? Tidak bisa dikembalikan.',
+                useInput: true,
+                onConfirm: async (picValue) => {
+                    try {
+                        const snap = await getDocs(collection(db, "logs"));
+                        if (snap.empty) return showModal({type:'error', title:'Info', message:'Log kosong.'});
+                        const batch = writeBatch(db);
+                        snap.forEach(d => batch.delete(d.ref));
+                        await batch.commit();
+                        showModal({type:'success', title:'Bersih', message:'Semua log dihapus.'});
+                        addLog("SYSTEM", 0, "RESET LOGS", 0, "SYSTEM", picValue);
+                    } catch(e) { showModal({type:'error', title:'Gagal', message:e.message}); }
+                }
+            })
+        });
+
+        async function addLog(name, prev, change, after, type, pic, note = "") {
+            await addDoc(collection(db, "logs"), { name, prev, change, after, type, pic, note, timestamp: serverTimestamp() });
         }
 
+        // --- UI HELPERS ---
+        function showError(msg) { errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`; errorBanner.classList.remove('hidden'); }
+        function hideError() { errorBanner.classList.add('hidden'); }
+        function renderRow(id, item, tbody) {
+            const row = document.createElement('tr');
+            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800';
+            row.innerHTML = `
+                <td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td>
+                <td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td>
+                <td class="p-4 text-right"><div class="flex justify-end gap-2">
+                    <button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button>
+                    <button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button>
+                </div></td>`;
+            tbody.appendChild(row);
+        }
+        
+        function renderLogCard(id, log, container, isCraftingView = false) {
+            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
+            let changeClass = "text-cartel-gold";
+            if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
+            else if (String(log.change).includes('+')) changeClass = "text-green-500";
+            
+            // Build Detailed Ingredient Table if Crafting View & Data exists
+            let detailsHTML = '';
+            if (isCraftingView && log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
+                let rows = log.ingredientsSnapshot.map(ing => `
+                    <tr class="border-b border-gray-800 last:border-0 text-[10px]">
+                        <td class="py-1 text-gray-400">${ing.name}</td>
+                        <td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td>
+                        <td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td>
+                    </tr>
+                `).join('');
+                
+                detailsHTML = `
+                    <div class="mt-3 bg-black/40 rounded p-2 border border-gray-800">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="text-[9px] text-gray-600 border-b border-gray-700">
+                                    <th class="text-left pb-1">BAHAN</th>
+                                    <th class="text-center pb-1">PAKAI</th>
+                                    <th class="text-right pb-1">STOCK LOG</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
+            // Note display
+            let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
+
+            const html = `
+                <div class="fade-in mb-6 relative group">
+                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button>
+                    </div>
+                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
+                        <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800">
+                            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div>
+                            <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
+                        </div>
+                        <div class="p-5 relative z-10 bg-[#121212]">
+                            <div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div>
+                            
+                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
+                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div>
+                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono ${changeClass} font-bold text-lg">${log.change}</div></div>
+                                <div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div>
+                            </div>
+
+                            ${detailsHTML}
+                            ${noteHTML}
+
+                            <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div>
+                        </div>
+                        <div class="h-1.5 w-full ${log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':'bg-cartel-gold')}"></div>
+                    </div>
+                </div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        }
+
+        // Modal Logic & Capture Report (Same as before)
+        window.showModal = function({ type, title, message, useInput, onConfirm }) {
+            document.getElementById('modalInput').value = '';
+            document.getElementById('modalInputContainer').className = useInput ? 'mb-6' : 'hidden';
+            document.getElementById('btnModalCancel').className = (type.includes('confirm') || type.includes('delete')) ? 'px-4 py-2 rounded border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800 transition text-sm font-bold uppercase' : 'hidden';
+            document.getElementById('modalTitle').innerText = title;
+            document.getElementById('modalMessage').innerText = message;
+            modalConfirmCallback = onConfirm;
+            
+            modalIcon.innerHTML = type === 'success' ? '<i class="fa-solid fa-circle-check text-green-500"></i>' : (type === 'error' ? '<i class="fa-solid fa-circle-exclamation text-red-500"></i>' : '<i class="fa-solid fa-triangle-exclamation text-cartel-gold"></i>');
+            btnModalConfirm.className = `px-6 py-2 rounded font-bold transition shadow-lg uppercase tracking-wider ${type === 'delete' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-cartel-gold text-black hover:bg-yellow-500'}`;
+            btnModalConfirm.innerText = type.includes('confirm') ? 'Proses' : (type === 'delete' ? 'Musnahkan' : 'OK');
+
+            modalBackdrop.classList.remove('hidden');
+            setTimeout(() => { modalBackdrop.classList.remove('opacity-0'); document.getElementById('modalCard').classList.remove('scale-95'); document.getElementById('modalCard').classList.add('scale-100'); }, 10);
+        }
+        window.closeModal = function() {
+            modalBackdrop.classList.add('opacity-0'); document.getElementById('modalCard').classList.remove('scale-100'); document.getElementById('modalCard').classList.add('scale-95');
+            setTimeout(() => { modalBackdrop.classList.add('hidden'); }, 300); modalConfirmCallback = null;
+        }
+        btnModalCancel.addEventListener('click', closeModal);
+        btnModalConfirm.addEventListener('click', () => {
+            if (modalConfirmCallback) {
+                const val = document.getElementById('modalInput').value.trim();
+                if (!document.getElementById('modalInputContainer').classList.contains('hidden') && !val) return;
+                modalConfirmCallback(val);
+            }
+            closeModal();
+        });
+        
         window.captureReport = function(elementId) {
             const element = document.getElementById(elementId);
             if(!element) return;
-            html2canvas(element, { scale: 3, backgroundColor: '#121212', useCORS: true }).then(canvas => {
-                const link = document.createElement('a');
-                link.download = `Vikrama_Log_${Date.now()}.png`;
-                link.href = canvas.toDataURL("image/png", 1.0);
+            // Reduced scale to 2.0 to prevent large file corruption
+            html2canvas(element, { scale: 2, backgroundColor: '#121212', useCORS: true }).then(canvas => {
+                const link = document.createElement('a'); 
+                link.download = `Vikrama_Log_${Date.now()}.png`; 
+                // Using standard data URL call
+                link.href = canvas.toDataURL("image/png"); 
                 link.click();
             });
         }
     </script>
-    
-    <!-- Config Theme -->
     <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: { cartel: { bg: '#0f0f0f', panel: '#1a1a1a', border: '#333333', gold: '#d4af37' } },
-                    animation: {
-                        shake: 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
-                    },
-                    keyframes: {
-                        shake: {
-                            '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' },
-                            '20%, 80%': { transform: 'translate3d(2px, 0, 0)' },
-                            '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' },
-                            '40%, 60%': { transform: 'translate3d(4px, 0, 0)' }
-                        }
-                    }
-                }
-            }
-        }
-        setInterval(() => {
-            const now = new Date();
-            const elClock = document.getElementById('clock');
-            if(elClock) elClock.innerText = now.toLocaleTimeString('id-ID', { hour12: false });
-        }, 1000);
+        tailwind.config = { theme: { extend: { colors: { cartel: { bg: '#0f0f0f', panel: '#1a1a1a', border: '#333333', gold: '#d4af37' } }, animation: { shake: 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both' }, keyframes: { shake: { '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' }, '20%, 80%': { transform: 'translate3d(2px, 0, 0)' }, '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' }, '40%, 60%': { transform: 'translate3d(4px, 0, 0)' } } } } } }
+        setInterval(() => { const elClock = document.getElementById('clock'); if(elClock) elClock.innerText = new Date().toLocaleTimeString('id-ID', { hour12: false }); }, 1000);
     </script>
 </head>
 <body class="min-h-screen flex flex-col p-4 md:p-8 bg-[#0f0f0f] text-white">
 
-    <!-- LOCK SCREEN OVERLAY -->
+    <!-- LOCK SCREEN -->
     <div id="lockScreen" class="fixed inset-0 z-[60] bg-[#050505] flex flex-col items-center justify-center transition-opacity duration-500">
         <div class="text-center mb-8">
-            <div class="w-20 h-20 border-2 border-cartel-gold rounded-full flex items-center justify-center text-cartel-gold text-4xl shadow-[0_0_20px_rgba(212,175,55,0.4)] bg-black mx-auto mb-4 animate-pulse">
-                <i class="fa-solid fa-lock"></i>
-            </div>
+            <div class="w-20 h-20 border-2 border-cartel-gold rounded-full flex items-center justify-center text-cartel-gold text-4xl shadow-[0_0_20px_rgba(212,175,55,0.4)] bg-black mx-auto mb-4 animate-pulse"><i class="fa-solid fa-lock"></i></div>
             <h1 class="text-3xl font-bold text-cartel-gold tracking-[0.2em] uppercase">Vikrama Security</h1>
             <p class="text-gray-500 text-xs mt-2 uppercase tracking-wider">Restricted Access</p>
         </div>
-        
         <div class="w-full max-w-xs space-y-4">
-            <div class="relative">
-                 <input type="password" id="pinInput" class="w-full bg-[#1a1a1a] border border-gray-800 text-center text-white text-xl tracking-[0.5em] px-4 py-3 rounded focus:outline-none focus:border-cartel-gold focus:shadow-[0_0_15px_rgba(212,175,55,0.2)] transition placeholder-gray-700 font-mono" placeholder="PIN" maxlength="6">
-            </div>
-            <button onclick="checkPin()" id="btnLogin" class="w-full bg-cartel-gold hover:bg-yellow-600 text-black font-bold py-3 rounded transition shadow-lg uppercase tracking-widest text-sm flex justify-center items-center gap-2">
-                <i class="fa-solid fa-fingerprint"></i> Akses System
-            </button>
+            <input type="password" id="pinInput" class="w-full bg-[#1a1a1a] border border-gray-800 text-center text-white text-xl tracking-[0.5em] px-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700 font-mono" placeholder="PIN" maxlength="6">
+            <button onclick="checkPin()" id="btnLogin" class="w-full bg-cartel-gold hover:bg-yellow-600 text-black font-bold py-3 rounded transition shadow-lg uppercase tracking-widest text-sm flex justify-center items-center gap-2"><i class="fa-solid fa-fingerprint"></i> Akses System</button>
             <p id="loginStatus" class="text-center text-xs text-gray-600 h-4">Menghubungkan...</p>
         </div>
     </div>
 
-    <!-- MAIN APP CONTENT (HIDDEN INITIALLY) -->
+    <!-- MAIN APP -->
     <div id="mainApp" class="hidden transition-opacity duration-1000 opacity-0 w-full flex flex-col min-h-screen">
-
-        <!-- MODAL CONFIRMATION DIALOG -->
-        <div id="modalBackdrop" class="fixed inset-0 bg-black/90 z-50 hidden flex items-center justify-center backdrop-blur-sm opacity-0 transition-opacity duration-300">
-            <div id="modalCard" class="bg-[#1a1a1a] border border-cartel-gold/50 rounded-lg p-6 max-w-sm w-full mx-4 shadow-[0_0_30px_rgba(212,175,55,0.2)] transform scale-95 transition-transform duration-300">
-                <!-- Icon Area -->
-                <div id="modalIcon" class="text-4xl text-center mb-4 text-cartel-gold"></div>
-                
-                <!-- Title -->
-                <h3 id="modalTitle" class="text-xl font-bold text-center text-white mb-2 uppercase tracking-widest"></h3>
-                
-                <!-- Message -->
-                <p id="modalMessage" class="text-gray-400 text-center text-sm mb-6"></p>
-
-                <!-- Input Area (Hidden by default, used for PIC on delete) -->
-                <div id="modalInputContainer" class="hidden mb-6">
-                    <label class="block text-xs text-gray-500 mb-1 uppercase text-center">PIC Eksekutor (Wajib)</label>
-                    <input type="text" id="modalInput" class="w-full bg-black border border-cartel-border text-white px-3 py-2 rounded focus:outline-none focus:border-cartel-gold text-center" placeholder="Ketik Nama Anda...">
-                </div>
-
-                <!-- Buttons -->
-                <div class="flex gap-3 justify-center">
-                    <button id="btnModalCancel" class="hidden px-4 py-2 rounded border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800 transition text-sm font-bold uppercase">Batal</button>
-                    <button id="btnModalConfirm" class="px-6 py-2 rounded bg-cartel-gold text-black font-bold hover:bg-yellow-500 transition shadow-lg uppercase tracking-wider">OK</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- ERROR BANNER -->
-        <div id="errorBanner" class="hidden bg-red-900/90 text-white text-center p-3 mb-4 rounded border border-red-500 font-bold animate-pulse text-sm"></div>
-
-        <!-- HEADER -->
+        
+        <!-- HEADER WITH NAV -->
         <header class="max-w-7xl mx-auto w-full flex flex-col md:flex-row justify-between items-center mb-8 border-b border-cartel-border pb-6">
             <div class="flex items-center gap-4 mb-4 md:mb-0">
                 <div class="w-14 h-14 border-2 border-cartel-gold rounded-full flex items-center justify-center text-cartel-gold text-2xl shadow-[0_0_15px_rgba(212,175,55,0.3)] bg-black">
-                    <i><img src="https://i.ibb.co.com/v4GmRjLj/Hitam-Oranye-Lingkaran-Paguyuban-Kelas-Logo.png"></img></i>
+                    <img src="https://i.ibb.co.com/v4GmRjLj/Hitam-Oranye-Lingkaran-Paguyuban-Kelas-Logo.png" class="w-10 h-10 object-contain rounded-full">
                 </div>
                 <div>
                     <h1 class="text-3xl font-bold text-cartel-gold tracking-widest uppercase">Vikrama Kulapati</h1>
-                    <p class="text-xs text-gray-500 tracking-[0.3em] uppercase">Cloud Inventory System</p>
+                    <div class="flex gap-4 mt-1">
+                        <button id="tab-inventory" onclick="switchTab('inventory')" class="text-xs font-bold uppercase tracking-wider bg-cartel-gold text-black px-3 py-1 rounded transition">Inventory</button>
+                        <button id="tab-crafting" onclick="switchTab('crafting')" class="text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white px-3 py-1 rounded transition">Crafting</button>
+                    </div>
                 </div>
             </div>
             <div class="text-right">
@@ -703,89 +834,147 @@
             </div>
         </header>
 
-        <!-- MAIN CONTENT -->
-        <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
-            <!-- KIRI: FORM & LOGS -->
-            <section class="lg:col-span-5 flex flex-col gap-6 h-full">
-                <div class="bg-cartel-panel p-6 rounded-lg border border-cartel-border shadow-lg relative z-20">
-                    <h2 class="text-cartel-gold text-lg font-bold mb-4 border-b border-cartel-border pb-2 flex items-center gap-2">
-                        <i class="fa-solid fa-pen-to-square"></i> Input Transaksi
-                    </h2>
-                    <form id="inventoryForm" class="space-y-4">
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama PIC</label>
-                            <div class="relative">
-                                <span class="absolute left-3 top-3 text-gray-500"><i class="fa-solid fa-user-secret"></i></span>
-                                <input type="text" id="picName" placeholder="Nama Anda..." class="w-full bg-black border border-cartel-border text-white pl-10 pr-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700" required>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama Barang</label>
-                            <input type="text" id="itemName" list="itemList" autocomplete="off" placeholder="Cari atau input baru..." class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700">
-                            <datalist id="itemList"></datalist>
-                        </div>
-                        <div class="grid grid-cols-2 gap-4">
+        <!-- VIEW: INVENTORY (DEFAULT) -->
+        <div id="view-inventory" class="w-full">
+            <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <section class="lg:col-span-5 flex flex-col gap-6 h-full">
+                    <div class="bg-cartel-panel p-6 rounded-lg border border-cartel-border shadow-lg relative z-20">
+                        <h2 class="text-cartel-gold text-lg font-bold mb-4 border-b border-cartel-border pb-2 flex items-center gap-2"><i class="fa-solid fa-pen-to-square"></i> Input Transaksi</h2>
+                        <form id="inventoryForm" class="space-y-4">
+                            <div><label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama PIC</label><div class="relative"><span class="absolute left-3 top-3 text-gray-500"><i class="fa-solid fa-user-secret"></i></span><input type="text" id="picName" placeholder="Nama Anda..." class="w-full bg-black border border-cartel-border text-white pl-10 pr-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700" required></div></div>
                             <div>
-                                <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Aksi</label>
-                                <select id="actionType" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold cursor-pointer">
-                                    <option value="add">➕ Masuk (Add)</option>
-                                    <option value="remove">➖ Keluar (Remove)</option>
-                                    <option value="set">🔄 Set Ulang (Fix)</option>
-                                </select>
+                                <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Nama Barang</label>
+                                <input type="text" id="itemName" list="itemList" autocomplete="off" placeholder="Cari atau input baru..." 
+                                    class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700 uppercase" 
+                                    style="text-transform: uppercase;">
+                                <datalist id="itemList"></datalist>
                             </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div><label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Aksi</label><select id="actionType" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold cursor-pointer"><option value="add">➕ Masuk (Add)</option><option value="remove">➖ Keluar (Remove)</option><option value="set">🔄 Set Ulang (Fix)</option></select></div>
+                                <div><label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Jumlah</label><input type="number" id="itemQty" min="1" value="1" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold font-mono"></div>
+                            </div>
+                            <!-- NEW NOTE FIELD -->
                             <div>
-                                <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Jumlah</label>
-                                <input type="number" id="itemQty" min="1" value="1" class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold font-mono">
+                                <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Catatan (Opsional)</label>
+                                <input type="text" id="itemNote" placeholder="Keterangan transaksi..." class="w-full bg-black border border-cartel-border text-white px-4 py-3 rounded focus:outline-none focus:border-cartel-gold transition placeholder-gray-700 text-sm">
                             </div>
-                        </div>
-                        <button type="submit" class="w-full bg-gradient-to-r from-cartel-gold to-yellow-700 text-black font-bold py-3 rounded hover:brightness-110 transition shadow-lg mt-2 uppercase tracking-wide">
-                            <i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database
-                        </button>
-                    </form>
-                </div>
-                <div class="flex-grow flex flex-col min-h-[400px]">
-                    <div class="flex justify-between items-center mb-2">
-                        <span class="text-xs text-gray-500 uppercase font-bold tracking-wider"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Live Logs</span>
-                        <button id="btnClearLogs" class="text-[10px] text-red-500 hover:text-red-400 font-bold border border-red-900 bg-red-900/20 px-2 py-1 rounded transition">
-                            <i class="fa-solid fa-trash-can mr-1"></i> CLEAR LOGS
-                        </button>
+                            <button type="submit" class="w-full bg-gradient-to-r from-cartel-gold to-yellow-700 text-black font-bold py-3 rounded hover:brightness-110 transition shadow-lg mt-2 uppercase tracking-wide"><i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database</button>
+                        </form>
                     </div>
-                    <div id="reportHistoryContainer" class="flex-grow overflow-y-auto pr-2 pb-10 max-h-[600px]">
-                        <div id="emptyReportState" class="text-center py-10 opacity-30">
-                            <i class="fa-solid fa-satellite-dish text-4xl mb-2 animate-pulse"></i>
-                            <p class="text-sm">Menunggu Data Server...</p>
-                        </div>
+                    <div class="flex-grow flex flex-col min-h-[400px]">
+                        <div class="flex justify-between items-center mb-2"><span class="text-xs text-gray-500 uppercase font-bold tracking-wider"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Live Logs</span><button id="btnClearLogs" class="text-[10px] text-red-500 hover:text-red-400 font-bold border border-red-900 bg-red-900/20 px-2 py-1 rounded transition"><i class="fa-solid fa-trash-can mr-1"></i> CLEAR LOGS</button></div>
+                        <div id="reportHistoryContainer" class="flex-grow overflow-y-auto pr-2 pb-10 max-h-[600px]"><div id="emptyReportState" class="text-center py-10 opacity-30"><i class="fa-solid fa-satellite-dish text-4xl mb-2 animate-pulse"></i><p class="text-sm">Menunggu Data Server...</p></div></div>
                     </div>
-                </div>
-            </section>
+                </section>
+                <section class="lg:col-span-7 h-full">
+                    <div class="bg-cartel-panel rounded-lg border border-cartel-border shadow-lg overflow-hidden flex flex-col h-full min-h-[600px]">
+                        <div class="p-5 border-b border-cartel-border flex justify-between items-center bg-[#151515]"><h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2"><i class="fa-solid fa-database"></i> Database Cartel</h2><div class="bg-cartel-gold text-black px-3 py-1 rounded text-xs font-bold shadow-lg">Items: <span id="totalItems">0</span></div></div>
+                        <div class="overflow-x-auto flex-grow"><table class="w-full text-left border-collapse"><thead><tr class="bg-[#121212] text-xs text-gray-500 uppercase tracking-wider border-b border-cartel-border"><th class="p-4 font-medium">Nama Barang</th><th class="p-4 font-medium text-center">Jumlah</th><th class="p-4 font-medium text-right">Aksi</th></tr></thead><tbody id="inventoryTable" class="text-sm divide-y divide-gray-800"></tbody></table></div>
+                        <div id="emptyTableState" class="hidden flex-col items-center justify-center h-64 text-gray-600"><i class="fa-solid fa-cloud text-5xl mb-4 opacity-20"></i><p class="text-sm">Database Kosong / Loading...</p></div>
+                    </div>
+                </section>
+            </main>
+        </div>
 
-            <!-- KANAN: TABEL -->
-            <section class="lg:col-span-7 h-full">
-                <div class="bg-cartel-panel rounded-lg border border-cartel-border shadow-lg overflow-hidden flex flex-col h-full min-h-[600px]">
-                    <div class="p-5 border-b border-cartel-border flex justify-between items-center bg-[#151515]">
-                        <h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2"><i class="fa-solid fa-database"></i> Database Cartel</h2>
-                        <div class="bg-cartel-gold text-black px-3 py-1 rounded text-xs font-bold shadow-lg">Items: <span id="totalItems">0</span></div>
+        <!-- VIEW: CRAFTING -->
+        <div id="view-crafting" class="w-full hidden">
+            <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <!-- RECIPE LIST -->
+                <section class="lg:col-span-8">
+                    <div class="bg-cartel-panel p-6 rounded-lg border border-cartel-border shadow-lg">
+                        <div class="flex justify-between items-center mb-6 border-b border-cartel-border pb-4">
+                            <h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2">
+                                <i class="fa-solid fa-flask"></i> Production Lab
+                            </h2>
+                            <button id="btnOpenRecipeForm" class="text-xs bg-gray-800 hover:bg-cartel-gold hover:text-black px-3 py-2 rounded font-bold transition flex items-center gap-2">
+                                <i class="fa-solid fa-plus"></i> BUAT RESEP BARU
+                            </button>
+                        </div>
+
+                        <!-- RECIPE EDITOR (Hidden) -->
+                        <div id="recipeFormContainer" class="hidden bg-[#151515] border border-gray-700 rounded p-4 mb-6">
+                            <h3 class="text-cartel-gold font-bold mb-4 uppercase text-sm border-b border-gray-800 pb-2" id="formTitle">Buat Resep Baru</h3>
+                            <form id="recipeForm" class="space-y-4">
+                                <input type="hidden" id="recipeId">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-[10px] text-gray-500 uppercase mb-1">Nama Resep</label>
+                                        <input type="text" id="recipeName" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm focus:border-cartel-gold uppercase" placeholder="CONTOH: PAKET GANJA" required>
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <div class="col-span-2">
+                                            <label class="block text-[10px] text-gray-500 uppercase mb-1">Output Item</label>
+                                            <input type="text" id="recOutName" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm focus:border-cartel-gold uppercase" placeholder="NAMA HASIL" required>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] text-gray-500 uppercase mb-1">Jml Hasil</label>
+                                            <input type="number" id="recOutQty" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm focus:border-cartel-gold text-center" value="1" min="1" required>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="border-t border-gray-800 pt-2 mt-2">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <p class="text-[10px] text-gray-500 uppercase">Bahan-Bahan</p>
+                                        <button type="button" id="btnAddIngredient" class="text-[10px] bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded text-cartel-gold transition"><i class="fa-solid fa-plus mr-1"></i> Tambah</button>
+                                    </div>
+                                    
+                                    <!-- Dynamic Ingredients Container -->
+                                    <div id="ingredientsListContainer" class="space-y-2">
+                                        <!-- Rows added by JS -->
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-end gap-2 pt-2">
+                                    <button type="button" id="btnCloseRecipeForm" class="text-xs px-4 py-2 bg-gray-700 rounded hover:bg-gray-600 text-white">Batal</button>
+                                    <button type="submit" class="text-xs px-6 py-2 bg-cartel-gold text-black font-bold rounded hover:bg-yellow-500">SIMPAN RESEP</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <div id="recipeContainer" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Recipe Cards Injected by JS -->
+                        </div>
                     </div>
-                    <div class="overflow-x-auto flex-grow">
-                        <table class="w-full text-left border-collapse">
-                            <thead>
-                                <tr class="bg-[#121212] text-xs text-gray-500 uppercase tracking-wider border-b border-cartel-border">
-                                    <th class="p-4 font-medium">Nama Barang</th>
-                                    <th class="p-4 font-medium text-center">Jumlah</th>
-                                    <th class="p-4 font-medium text-right">Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody id="inventoryTable" class="text-sm divide-y divide-gray-800"></tbody>
-                        </table>
+                </section>
+
+                <!-- CRAFTING LOGS -->
+                <section class="lg:col-span-4">
+                    <div class="bg-cartel-panel p-4 rounded-lg border border-cartel-border shadow-lg h-full flex flex-col">
+                        <h3 class="text-xs text-gray-500 uppercase font-bold tracking-wider mb-4 border-b border-gray-800 pb-2">
+                            <i class="fa-solid fa-scroll mr-1"></i> Crafting History
+                        </h3>
+                        <div id="craftingHistoryContainer" class="flex-grow overflow-y-auto pr-2 pb-4 max-h-[600px] space-y-4">
+                            <!-- Crafting Logs Injected Here -->
+                            <div class="text-center py-10 opacity-30 text-xs text-gray-500">
+                                Belum ada aktivitas crafting.
+                            </div>
+                        </div>
                     </div>
-                    <div id="emptyTableState" class="hidden flex-col items-center justify-center h-64 text-gray-600">
-                        <i class="fa-solid fa-cloud text-5xl mb-4 opacity-20"></i>
-                        <p class="text-sm">Database Kosong / Loading...</p>
-                    </div>
-                </div>
-            </section>
-        </main>
+                </section>
+            </main>
+        </div>
+
     </div>
-    
+
+    <!-- MODAL CONFIRMATION DIALOG -->
+    <div id="modalBackdrop" class="fixed inset-0 bg-black/90 z-50 hidden flex items-center justify-center backdrop-blur-sm opacity-0 transition-opacity duration-300">
+        <div id="modalCard" class="bg-[#1a1a1a] border border-cartel-gold/50 rounded-lg p-6 max-w-sm w-full mx-4 shadow-[0_0_30px_rgba(212,175,55,0.2)] transform scale-95 transition-transform duration-300">
+            <div id="modalIcon" class="text-4xl text-center mb-4 text-cartel-gold"></div>
+            <h3 id="modalTitle" class="text-xl font-bold text-center text-white mb-2 uppercase tracking-widest"></h3>
+            <p id="modalMessage" class="text-gray-400 text-center text-sm mb-6"></p>
+            <div id="modalInputContainer" class="hidden mb-6">
+                <label class="block text-xs text-gray-500 mb-1 uppercase text-center">PIC Eksekutor (Wajib)</label>
+                <input type="text" id="modalInput" class="w-full bg-black border border-cartel-border text-white px-3 py-2 rounded focus:outline-none focus:border-cartel-gold text-center" placeholder="Ketik Nama Anda...">
+            </div>
+            <div class="flex gap-3 justify-center">
+                <button id="btnModalCancel" class="hidden px-4 py-2 rounded border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800 transition text-sm font-bold uppercase">Batal</button>
+                <button id="btnModalConfirm" class="px-6 py-2 rounded bg-cartel-gold text-black font-bold hover:bg-yellow-500 transition shadow-lg uppercase tracking-wider">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="errorBanner" class="hidden bg-red-900/90 text-white text-center p-3 mb-4 rounded border border-red-500 font-bold animate-pulse text-sm absolute top-4 left-1/2 transform -translate-x-1/2 z-50 w-3/4 max-w-md"></div>
+
 </body>
 </html>
