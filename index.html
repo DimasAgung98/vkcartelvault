@@ -632,15 +632,45 @@
         window.captureReport = function(elementId) {
             const element = document.getElementById(elementId);
             if(!element) return;
-            html2canvas(element, { scale: 2, backgroundColor: '#121212', useCORS: true }).then(canvas => {
+
+            // Visual Feedback (Loading)
+            const btn = element.parentElement.querySelector('button');
+            const originalContent = btn ? btn.innerHTML : '';
+            if(btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+
+            html2canvas(element, { 
+                scale: 2, 
+                backgroundColor: '#121212', 
+                useCORS: true 
+            }).then(canvas => {
                 canvas.toBlob(function(blob) {
+                    if (!blob) {
+                        alert("Gagal membuat file gambar.");
+                        if(btn) btn.innerHTML = originalContent;
+                        return;
+                    }
                     const url = URL.createObjectURL(blob);
                     const link = document.createElement('a');
                     link.download = `Vikrama_Log_${Date.now()}.png`;
                     link.href = url;
+                    
+                    // PENTING: Append ke body agar browser mengizinkan download
+                    document.body.appendChild(link); 
                     link.click();
+                    document.body.removeChild(link); // Bersihkan
+                    
                     URL.revokeObjectURL(url);
+
+                    // Feedback Sukses
+                    if(btn) {
+                        btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
+                        setTimeout(() => btn.innerHTML = originalContent, 2000);
+                    }
                 });
+            }).catch(err => {
+                console.error("Screenshot Error:", err);
+                alert("Gagal mengambil screenshot.");
+                if(btn) btn.innerHTML = originalContent;
             });
         }
     </script>
