@@ -38,18 +38,21 @@
         let systemPin = "1234";
         let inventoryCache = {}; 
         let recipes = [];
-        let currentViewMode = 'list'; // 'list' or 'grid'
+        let cart = []; 
+        let currentViewMode = 'list'; 
 
         // DOM Elements
         const statusEl = document.getElementById('date'); 
-        const form = document.getElementById('inventoryForm');
+        const form = document.getElementById('inventoryForm'); 
         const errorBanner = document.getElementById('errorBanner');
         
-        // Views
+        // Views & Tabs
         const viewInventory = document.getElementById('view-inventory');
         const viewCrafting = document.getElementById('view-crafting');
+        const viewSales = document.getElementById('view-sales');
         const tabInventory = document.getElementById('tab-inventory');
         const tabCrafting = document.getElementById('tab-crafting');
+        const tabSales = document.getElementById('tab-sales');
 
         // Inventory Elements
         const inventoryTable = document.getElementById('inventoryTable');
@@ -76,21 +79,24 @@
         const ingredientsListContainer = document.getElementById('ingredientsListContainer');
         const btnAddIngredient = document.getElementById('btnAddIngredient');
 
+        // Config Modal Elements (Sales)
+        const configModal = document.getElementById('configModal');
+
         // --- UI HELPERS ---
         function showError(msg) {
             if (errorBanner) {
                 errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`;
                 errorBanner.classList.remove('hidden');
             } else {
-                console.error("Error Banner not found:", msg);
+                console.error("Error:", msg);
             }
         }
 
         function hideError() {
-            if (errorBanner) {
-                errorBanner.classList.add('hidden');
-            }
+            if (errorBanner) errorBanner.classList.add('hidden');
         }
+
+        const formatMoney = (num) => '$' + parseInt(num).toLocaleString('en-US');
 
         // --- 1. INITIALIZATION ---
         async function initSystem() {
@@ -102,13 +108,12 @@
                 statusEl.className = "text-xs text-yellow-500 font-bold uppercase animate-pulse";
                 await signInAnonymously(auth);
             } catch (e) {
-                console.error("Init Error:", e);
                 if (e.code === 'auth/configuration-not-found' || e.code === 'auth/operation-not-allowed') {
-                    showError("⚠️ SETUP ERROR: Auth belum aktif. Cek Firebase Console.");
+                    showError("⚠️ SETUP ERROR: Auth belum aktif.");
                     statusEl.innerText = "AUTH FAILED";
                     statusEl.className = "text-xs text-red-500 font-bold uppercase";
                 } else {
-                    showError("Init Gagal: " + e.message);
+                    console.error(e);
                 }
             }
         }
@@ -172,64 +177,62 @@
 
         // --- 3. NAVIGATION TABS ---
         window.switchTab = function(tab) {
+            viewInventory.classList.add('hidden');
+            viewCrafting.classList.add('hidden');
+            viewSales.classList.add('hidden');
+            
+            [tabInventory, tabCrafting, tabSales].forEach(t => {
+                t.classList.remove('bg-cartel-gold', 'text-black');
+                t.classList.add('text-gray-400', 'hover:text-white');
+            });
+
             if (tab === 'inventory') {
                 viewInventory.classList.remove('hidden');
-                viewCrafting.classList.add('hidden');
                 tabInventory.classList.add('bg-cartel-gold', 'text-black');
-                tabInventory.classList.remove('text-gray-400', 'hover:text-white');
-                tabCrafting.classList.remove('bg-cartel-gold', 'text-black');
-                tabCrafting.classList.add('text-gray-400', 'hover:text-white');
-            } else {
-                viewInventory.classList.add('hidden');
+            } else if (tab === 'crafting') {
                 viewCrafting.classList.remove('hidden');
                 tabCrafting.classList.add('bg-cartel-gold', 'text-black');
-                tabCrafting.classList.remove('text-gray-400', 'hover:text-white');
-                tabInventory.classList.remove('bg-cartel-gold', 'text-black');
-                tabInventory.classList.add('text-gray-400', 'hover:text-white');
                 updateCraftingUI();
+            } else if (tab === 'sales') {
+                viewSales.classList.remove('hidden');
+                tabSales.classList.add('bg-cartel-gold', 'text-black');
+                renderSalesCatalog();
             }
         }
 
-        // --- 4. VIEW TOGGLE (LIST/GRID) ---
+        // --- 4. VIEW TOGGLE ---
         window.switchView = function(mode) {
             currentViewMode = mode;
             if (mode === 'list') {
                 btnViewList.classList.add('text-cartel-gold', 'bg-gray-800');
-                btnViewList.classList.remove('text-gray-500');
                 btnViewGrid.classList.remove('text-cartel-gold', 'bg-gray-800');
-                btnViewGrid.classList.add('text-gray-500');
                 inventoryTable.parentElement.classList.remove('hidden');
                 inventoryGrid.classList.add('hidden');
             } else {
                 btnViewGrid.classList.add('text-cartel-gold', 'bg-gray-800');
-                btnViewGrid.classList.remove('text-gray-500');
                 btnViewList.classList.remove('text-cartel-gold', 'bg-gray-800');
-                btnViewList.classList.add('text-gray-500');
                 inventoryTable.parentElement.classList.add('hidden');
                 inventoryGrid.classList.remove('hidden');
             }
         }
 
-        // --- 5. HELPER: ICON GENERATOR ---
         function getIconForName(name) {
             name = name.toLowerCase();
-            if (name.includes('ganja') || name.includes('weed') || name.includes('cannabis')) return 'fa-cannabis';
-            if (name.includes('uang') || name.includes('money') || name.includes('cash')) return 'fa-money-bill-wave';
-            if (name.includes('senjata') || name.includes('gun') || name.includes('pistol') || name.includes('rifle') || name.includes('ak-47')) return 'fa-person-rifle';
-            if (name.includes('ammo') || name.includes('peluru')) return 'fa-bullseye';
-            if (name.includes('micin') || name.includes('meth') || name.includes('sabu')) return 'fa-icicles';
-            if (name.includes('plastik') || name.includes('pack')) return 'fa-box-open';
-            if (name.includes('hp') || name.includes('phone')) return 'fa-mobile-screen';
-            if (name.includes('armor') || name.includes('kevlar')) return 'fa-shield-halved';
-            if (name.includes('kunci') || name.includes('key')) return 'fa-key';
-            return 'fa-box';
+            if (name.includes('ganja') || name.includes('weed')) return 'fa-cannabis';
+            if (name.includes('uang') || name.includes('money')) return 'fa-money-bill-wave';
+            if (name.includes('senjata') || name.includes('gun')) return 'fa-person-rifle';
+            if (name.includes('ammo')) return 'fa-bullseye';
+            if (name.includes('micin') || name.includes('meth')) return 'fa-icicles';
+            if (name.includes('hp')) return 'fa-mobile-screen';
+            if (name.includes('armor')) return 'fa-shield-halved';
+            return 'fa-box-open';
         }
 
-        // --- 6. DATABASE LISTENERS ---
+        // --- 5. DATABASE LISTENERS ---
         function startDatabaseListeners() {
             if (!db) return;
 
-            // ITEMS LISTENER
+            // ITEMS
             const qItems = query(collection(db, "items"), orderBy("name"));
             onSnapshot(qItems, (snapshot) => {
                 const datalist = document.getElementById('itemList');
@@ -248,16 +251,16 @@
                     emptyTable.style.display = 'none';
                     snapshot.forEach((docSnap) => {
                         const item = docSnap.data();
-                        
                         inventoryCache[item.name.toLowerCase()] = {
                             id: docSnap.id,
                             name: item.name, 
-                            qty: parseInt(item.qty) || 0
+                            qty: parseInt(item.qty) || 0,
+                            isForSale: item.isForSale || false,
+                            capitalPrice: parseInt(item.capitalPrice) || 0,
+                            sellPrice: parseInt(item.sellPrice) || 0
                         };
-
                         renderRow(docSnap.id, item, inventoryTable);
                         renderGridCard(docSnap.id, item, inventoryGrid);
-                        
                         const opt = document.createElement('option');
                         opt.value = item.name;
                         datalist.appendChild(opt);
@@ -265,55 +268,49 @@
                     });
                 }
                 totalLabel.innerText = count;
-                
                 if (!viewCrafting.classList.contains('hidden')) updateCraftingUI();
-
+                if (!viewSales.classList.contains('hidden')) renderSalesCatalog();
             }, (error) => {
-                if (error.code === 'permission-denied') showError("⛔ AKSES DITOLAK: Security Rules Blocked.");
+                if (error.code === 'permission-denied') showError("⛔ AKSES DITOLAK.");
                 else showError("DB Error: " + error.message);
             });
 
-            // LOGS LISTENER
+            // LOGS
             const qLogs = query(collection(db, "logs"), orderBy("timestamp", "desc"));
-                onSnapshot(qLogs, (snapshot) => {
-                    const invLogContainer = document.getElementById('reportHistoryContainer');
-                    const craftLogContainer = document.getElementById('craftingHistoryContainer');
-                    
-                    if (!invLogContainer || !craftLogContainer) return;
-                    
-                    invLogContainer.innerHTML = ''; 
-                    craftLogContainer.innerHTML = '';
+            onSnapshot(qLogs, (snapshot) => {
+                const invLogContainer = document.getElementById('reportHistoryContainer');
+                const craftLogContainer = document.getElementById('craftingHistoryContainer');
+                const salesLogContainer = document.getElementById('salesHistoryContainer');
+                
+                if (invLogContainer) invLogContainer.innerHTML = ''; 
+                if (craftLogContainer) craftLogContainer.innerHTML = '';
+                if (salesLogContainer) salesLogContainer.innerHTML = '';
 
-                    snapshot.forEach((docSnap) => {
-                        const log = docSnap.data();
-                        const logId = docSnap.id;
-                        
-                        renderLogCard(logId, log, invLogContainer, false);
-                        
-                        if (log.type === 'CRAFTING') {
-                            renderCraftingLogCard(logId, log, craftLogContainer);
-                        }
-                    });
+                snapshot.forEach((docSnap) => {
+                    const log = docSnap.data();
+                    renderLogCard(docSnap.id, log, invLogContainer, false);
+                    if (log.type === 'CRAFTING' && craftLogContainer) renderCraftingLogCard(docSnap.id, log, craftLogContainer);
+                    if (log.type === 'SALE' && salesLogContainer) renderSalesLogCard(docSnap.id, log, salesLogContainer);
                 });
+            });
 
-            // RECIPES LISTENER
+            // RECIPES
             const qRecipes = query(collection(db, "recipes"), orderBy("name"));
             onSnapshot(qRecipes, (snapshot) => {
                 recipes = [];
-                snapshot.forEach(docSnap => {
-                    recipes.push({ id: docSnap.id, ...docSnap.data() });
-                });
+                snapshot.forEach(docSnap => recipes.push({ id: docSnap.id, ...docSnap.data() }));
                 updateCraftingUI();
             });
         }
 
-        // --- 7. RECIPE & CRAFTING LOGIC ---
+        // --- 6. CRAFTING LOGIC ---
         function updateCraftingUI() {
             const container = document.getElementById('recipeContainer');
+            if (!container) return;
             container.innerHTML = '';
 
             if (recipes.length === 0) {
-                container.innerHTML = '<div class="text-gray-500 text-sm col-span-2 text-center py-10">Belum ada resep. Klik "Buat Resep Baru".</div>';
+                container.innerHTML = '<div class="col-span-full text-center py-10 text-gray-500">Belum ada resep. Klik "Buat Resep Baru".</div>';
                 return;
             }
 
@@ -322,10 +319,11 @@
                 recipe.ingredients.forEach(ing => {
                     const stockItem = inventoryCache[ing.name.toLowerCase()];
                     const currentQty = stockItem ? stockItem.qty : 0;
+                    const hasEnough = currentQty >= ing.qty;
                     ingredientHTML += `
                         <div class="flex justify-between text-xs mb-1 border-b border-gray-800 pb-1 last:border-0">
                             <span class="text-gray-400">${ing.name} (x${ing.qty})</span>
-                            <span class="${currentQty >= ing.qty ? 'text-green-500' : 'text-red-500'} font-mono">Stok: ${currentQty}</span>
+                            <span class="${hasEnough ? 'text-green-500' : 'text-red-500'} font-mono">Stok: ${currentQty}</span>
                         </div>`;
                 });
 
@@ -353,184 +351,239 @@
 
         window.processCraft = function(recipeId) {
             if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
-
             const recipe = recipes.find(r => r.id === recipeId);
             if (!recipe) return;
-
             const craftQtyInput = document.getElementById(`qty-${recipeId}`);
             const craftMultiplier = parseInt(craftQtyInput.value) || 1;
-
-            if (craftMultiplier < 1) return showModal({ type: 'error', title: 'Error', message: 'Jumlah tidak valid.' });
-
-            let missingIngredients = [];
-            recipe.ingredients.forEach(ing => {
-                const requiredTotal = ing.qty * craftMultiplier;
-                const stockItem = inventoryCache[ing.name.toLowerCase()];
-                const currentQty = stockItem ? stockItem.qty : 0;
-                if (currentQty < requiredTotal) missingIngredients.push(`${ing.name} (Kurang: ${requiredTotal - currentQty})`);
-            });
-
-            if (missingIngredients.length > 0) return showModal({ type: 'error', title: 'Bahan Tidak Cukup', message: `Gagal membuat ${craftMultiplier} paket. \n${missingIngredients.join(', ')}` });
-
-            showModal({
-                type: 'confirm',
-                title: 'Konfirmasi Crafting',
-                message: `Membuat ${craftMultiplier}x ${recipe.name} (${craftMultiplier * recipe.outputQty} ${recipe.outputName}). \nStok bahan akan dikurangi otomatis.`,
-                useInput: true,
-                onConfirm: async (picValue) => {
-                    if (!picValue) return showModal({type:'error', title:'Error', message:'Nama PIC Wajib diisi'});
-
-                    const batch = writeBatch(db);
-                    let ingredientsSnapshot = [];
+            
+            showModal({ type: 'confirm', title: 'Konfirmasi Crafting', message: `Craft ${craftMultiplier}x ${recipe.name}?`, useInput: true, onConfirm: async(picValue) => {
+                const batch = writeBatch(db);
+                let ingredientsSnapshot = [];
+                for (const ing of recipe.ingredients) {
+                    const itemKey = ing.name.toLowerCase();
+                    const stockItem = inventoryCache[itemKey];
+                    const req = ing.qty * craftMultiplier;
+                    if (!stockItem || stockItem.qty < req) return showModal({type:'error', title:'Gagal', message:`Stok ${ing.name} kurang.`});
                     
-                    // Deduct Ingredients
-                    for (const ing of recipe.ingredients) {
-                        const itemKey = ing.name.toLowerCase();
-                        const stockItem = inventoryCache[itemKey];
-                        const requiredTotal = ing.qty * craftMultiplier;
-                        
-                        if (!stockItem || stockItem.qty < requiredTotal) {
-                            showModal({ type: 'error', title: 'Gagal', message: `Stok ${ing.name} berubah dan tidak cukup.` });
-                            return;
-                        }
-                        const newStock = stockItem.qty - requiredTotal;
-                        batch.update(doc(db, "items", stockItem.id), { qty: newStock });
-                        ingredientsSnapshot.push({ name: ing.name, used: requiredTotal, before: stockItem.qty, after: newStock });
-                    }
+                    const newStock = stockItem.qty - req;
+                    batch.update(doc(db, "items", stockItem.id), { qty: newStock });
+                    ingredientsSnapshot.push({name:ing.name, used:req, before:stockItem.qty, after:newStock});
+                }
+                
+                const outputKey = recipe.outputName.toLowerCase();
+                const outputTotal = recipe.outputQty * craftMultiplier;
+                const existing = inventoryCache[outputKey];
+                let afterStock = outputTotal;
+                let prevStock = 0;
 
-                    // Handle Output
-                    const outputKey = recipe.outputName.toLowerCase();
-                    const outputTotal = recipe.outputQty * craftMultiplier;
-                    const existingOutput = inventoryCache[outputKey];
-                    let currentOutputStock = 0;
-                    let finalOutputStock = outputTotal;
+                if (existing) {
+                    prevStock = existing.qty;
+                    afterStock = prevStock + outputTotal;
+                    batch.update(doc(db, "items", existing.id), {qty: afterStock});
+                } else {
+                    batch.set(doc(collection(db, "items")), {name: recipe.outputName.toUpperCase(), qty: outputTotal, created_at: serverTimestamp()});
+                }
+                
+                batch.set(doc(collection(db, "logs")), {name: recipe.outputName.toUpperCase(), prev: prevStock, change: `+${outputTotal}`, after: afterStock, type:"CRAFTING", pic:picValue, ingredientsSnapshot, timestamp: serverTimestamp()});
+                await batch.commit();
+                showModal({type:'success', title:'Sukses', message:'Crafting berhasil.'});
+            }});
+        };
 
-                    if (existingOutput) {
-                        currentOutputStock = existingOutput.qty;
-                        finalOutputStock = currentOutputStock + outputTotal;
-                        batch.update(doc(db, "items", existingOutput.id), { qty: finalOutputStock });
-                    } else {
-                        const newDocRef = doc(collection(db, "items"));
-                        batch.set(newDocRef, { name: recipe.outputName.toUpperCase(), qty: outputTotal, created_at: serverTimestamp() });
-                    }
+        // --- 7. SALES LOGIC ---
+        window.openConfigModal = function() {
+            const container = document.getElementById('configListContainer');
+            container.innerHTML = '';
+            Object.values(inventoryCache).forEach(item => {
+                const div = document.createElement('div');
+                div.className = "flex items-center gap-2 p-2 border-b border-gray-700 hover:bg-gray-800 transition";
+                div.innerHTML = `
+                    <div class="flex-1"><p class="text-sm font-bold text-white">${item.name}</p><p class="text-[10px] text-gray-500">Stok: ${item.qty}</p></div>
+                    <div class="flex items-center gap-2">
+                        <div class="w-20"><label class="text-[9px] text-gray-500 block">Modal</label><input type="number" id="capital-${item.id}" value="${item.capitalPrice}" class="w-full bg-black border border-gray-600 text-white text-xs px-2 py-1 rounded"></div>
+                        <div class="w-20"><label class="text-[9px] text-gray-500 block">Jual</label><input type="number" id="sell-${item.id}" value="${item.sellPrice}" class="w-full bg-black border border-gray-600 text-white text-xs px-2 py-1 rounded"></div>
+                        <div class="flex flex-col items-center"><label class="text-[9px] text-gray-500 block mb-1">Jual?</label><input type="checkbox" id="check-${item.id}" ${item.isForSale ? 'checked' : ''} class="w-4 h-4 accent-cartel-gold"></div>
+                    </div>`;
+                container.appendChild(div);
+            });
+            configModal.classList.remove('hidden');
+        }
+        window.closeConfigModal = function() { configModal.classList.add('hidden'); }
+        window.saveConfig = async function() {
+            const batch = writeBatch(db);
+            const btn = document.getElementById('btnSaveConfig');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            Object.values(inventoryCache).forEach(item => {
+                const ref = doc(db, "items", item.id);
+                batch.update(ref, { 
+                    capitalPrice: parseInt(document.getElementById(`capital-${item.id}`).value) || 0, 
+                    sellPrice: parseInt(document.getElementById(`sell-${item.id}`).value) || 0,
+                    isForSale: document.getElementById(`check-${item.id}`).checked 
+                });
+            });
+            try { await batch.commit(); closeConfigModal(); showModal({ type: 'success', title: 'Sukses', message: 'Konfigurasi disimpan.' }); } 
+            catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } 
+            finally { btn.innerHTML = 'SIMPAN PERUBAHAN'; }
+        }
 
-                    const logRef = doc(collection(db, "logs"));
-                    batch.set(logRef, {
-                        name: recipe.outputName.toUpperCase(),
-                        prev: currentOutputStock,
-                        change: `+ ${outputTotal} (CRAFT x${craftMultiplier})`,
-                        after: finalOutputStock,
-                        type: "CRAFTING",
-                        pic: picValue,
-                        ingredientsSnapshot: ingredientsSnapshot,
-                        timestamp: serverTimestamp()
+        function renderSalesCatalog() {
+            const container = document.getElementById('salesCatalog');
+            container.innerHTML = '';
+            const saleItems = Object.values(inventoryCache).filter(i => i.isForSale);
+            if (saleItems.length === 0) { container.innerHTML = `<div class="col-span-full text-center py-10 text-gray-500">Belum ada produk dijual.</div>`; return; }
+            saleItems.forEach(item => {
+                const icon = getIconForName(item.name);
+                const div = document.createElement('div');
+                div.className = "bg-cartel-panel border border-cartel-border p-3 rounded-lg hover:border-cartel-gold cursor-pointer group transition relative overflow-hidden";
+                div.onclick = () => addToCart(item);
+                div.innerHTML = `<div class="flex justify-between items-start mb-2"><div class="w-8 h-8 rounded-full bg-black flex items-center justify-center text-cartel-gold"><i class="fa-solid ${icon}"></i></div><span class="text-xs font-mono text-gray-400 bg-black/50 px-2 py-0.5 rounded">Stok: ${item.qty}</span></div><h4 class="font-bold text-white text-sm mb-1 truncate">${item.name}</h4><p class="text-cartel-gold font-bold font-mono">${formatMoney(item.sellPrice)}</p>`;
+                container.appendChild(div);
+            });
+        }
+
+        window.addToCart = function(item) {
+            const existing = cart.find(c => c.id === item.id);
+            if (existing) {
+                if (existing.qty < item.qty) existing.qty++;
+                else return showModal({type: 'error', title: 'Stok Habis', message: 'Stok tidak cukup.'});
+            } else {
+                if (item.qty > 0) cart.push({ ...item, qty: 1 });
+                else return showModal({type: 'error', title: 'Stok Habis', message: 'Item kosong.'});
+            }
+            renderCart();
+        }
+        window.updateCartQty = function(id, change) {
+            const itemIdx = cart.findIndex(c => c.id === id);
+            if (itemIdx === -1) return;
+            const item = cart[itemIdx];
+            const stockItem = inventoryCache[item.name.toLowerCase()];
+            const newQty = item.qty + change;
+            if (newQty > stockItem.qty) return showModal({type: 'error', title: 'Limit', message: 'Melebihi stok.'});
+            if (newQty <= 0) cart.splice(itemIdx, 1); else item.qty = newQty;
+            renderCart();
+        }
+        window.removeFromCart = function(id) { cart = cart.filter(c => c.id !== id); renderCart(); }
+        
+        function renderCart() {
+            const container = document.getElementById('cartItems');
+            const totalEl = document.getElementById('cartTotal');
+            container.innerHTML = '';
+            let total = 0;
+            cart.forEach(item => {
+                total += item.sellPrice * item.qty;
+                const div = document.createElement('div');
+                div.className = "flex justify-between items-center bg-black/40 p-2 rounded border border-gray-800";
+                div.innerHTML = `<div class="flex-1"><p class="text-xs font-bold text-white truncate">${item.name}</p><p class="text-[10px] text-gray-500 font-mono">${formatMoney(item.sellPrice)} x ${item.qty}</p></div><div class="flex items-center gap-2"><button onclick="updateCartQty('${item.id}', -1)" class="text-gray-400 hover:text-white"><i class="fa-solid fa-minus-circle"></i></button><span class="text-sm font-bold w-4 text-center">${item.qty}</span><button onclick="updateCartQty('${item.id}', 1)" class="text-gray-400 hover:text-white"><i class="fa-solid fa-plus-circle"></i></button><button onclick="removeFromCart('${item.id}')" class="text-red-500 hover:text-red-400 ml-1"><i class="fa-solid fa-trash"></i></button></div>`;
+                container.appendChild(div);
+            });
+            totalEl.innerText = formatMoney(total);
+            const btn = document.getElementById('btnCheckout');
+            if (cart.length === 0) { btn.disabled = true; btn.classList.add('opacity-50'); } else { btn.disabled = false; btn.classList.remove('opacity-50'); }
+        }
+
+        window.processCheckout = function() {
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+            if (cart.length === 0) return;
+            const pic = document.getElementById('salePic').value.trim();
+            const buyer = document.getElementById('saleBuyer').value.trim();
+            const note = document.getElementById('saleNote').value.trim();
+            if (!pic || !buyer) return showModal({ type: 'error', title: 'Data Kurang', message: 'PIC & Pembeli wajib diisi.' });
+
+            showModal({ type: 'confirm', title: 'Konfirmasi', message: `Total: ${document.getElementById('cartTotal').innerText}. Lanjut?`, useInput: false, onConfirm: async () => {
+                const batch = writeBatch(db);
+                let totalCapital = 0, totalPrice = 0, itemsSnapshot = [];
+                for (const cItem of cart) {
+                    const stockItem = inventoryCache[cItem.name.toLowerCase()];
+                    if (!stockItem || stockItem.qty < cItem.qty) return showModal({ type: 'error', title: 'Gagal', message: `Stok ${cItem.name} tidak cukup.` });
+                    
+                    const currentStock = stockItem.qty;
+                    const newStock = currentStock - cItem.qty;
+                    
+                    batch.update(doc(db, "items", stockItem.id), { qty: newStock });
+                    totalCapital += (stockItem.capitalPrice * cItem.qty);
+                    totalPrice += (stockItem.sellPrice * cItem.qty);
+                    
+                    itemsSnapshot.push({ 
+                        name: cItem.name, 
+                        qty: cItem.qty, 
+                        price: stockItem.sellPrice, 
+                        subtotal: stockItem.sellPrice * cItem.qty,
+                        before: currentStock, // Capture Stock Before
+                        after: newStock       // Capture Stock After
                     });
+                }
+                const profit = totalPrice - totalCapital;
+                batch.set(doc(collection(db, "logs")), { type: 'SALE', pic, buyer, note, items: itemsSnapshot, totalPrice, totalCapital, profit, timestamp: serverTimestamp(), name: `PENJUALAN`, prev: '-', change: `+$${totalPrice}`, after: '-' });
+                try { await batch.commit(); showModal({ type: 'success', title: 'Sukses', message: 'Penjualan dicatat.' }); cart = []; renderCart(); document.getElementById('saleNote').value = ''; } catch (e) { showModal({ type: 'error', title: 'Error', message: e.message }); }
+            }});
+        }
 
+        window.deleteLog = function(id) {
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+            showModal({
+                type: 'delete',
+                title: 'Hapus Log?',
+                message: 'Menghapus log ini tidak akan mengembalikan stok barang. Lanjutkan?',
+                useInput: true,
+                onConfirm: async (pic) => {
                     try {
-                        await batch.commit();
-                        showModal({ type: 'success', title: 'Crafting Berhasil', message: `${craftMultiplier}x ${recipe.name} berhasil diproduksi.` });
-                        craftQtyInput.value = 1; 
+                        await deleteDoc(doc(db, "logs", id));
+                        showModal({ type: 'success', title: 'Terhapus', message: 'Log berhasil dihapus.' });
                     } catch (e) {
-                        showModal({ type: 'error', title: 'Error DB', message: e.message });
+                        showModal({ type: 'error', title: 'Gagal', message: e.message });
                     }
                 }
             });
         }
 
-        // --- 8. RECIPE CRUD ---
-        window.addIngredientRow = function(name = '', qty = 1) {
-            const div = document.createElement('div');
-            div.className = 'flex gap-2 mb-2 items-center ingredient-row';
-            div.innerHTML = `<input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" placeholder="NAMA BAHAN" value="${name}" required><input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}" min="1" required><button type="button" onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 px-2"><i class="fa-solid fa-xmark"></i></button>`;
-            ingredientsListContainer.appendChild(div);
-        }
-        btnOpenRecipeForm.addEventListener('click', () => { document.getElementById('recipeId').value = ''; document.getElementById('recipeName').value = ''; document.getElementById('recOutName').value = ''; document.getElementById('recOutQty').value = 1; document.getElementById('formTitle').innerText = 'Buat Resep Baru'; ingredientsListContainer.innerHTML = ''; addIngredientRow(); recipeFormContainer.classList.remove('hidden'); recipeFormContainer.scrollIntoView({ behavior: 'smooth' }); });
-        btnAddIngredient.addEventListener('click', () => { addIngredientRow(); });
-        btnCloseRecipeForm.addEventListener('click', () => { recipeFormContainer.classList.add('hidden'); });
-        
-        recipeForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "System offline." });
-            const id = document.getElementById('recipeId').value;
-            const name = document.getElementById('recipeName').value.trim().toUpperCase();
-            const outName = document.getElementById('recOutName').value.trim().toUpperCase();
-            const outQty = parseInt(document.getElementById('recOutQty').value);
-            let ingredients = [];
-            document.querySelectorAll('.ingredient-row').forEach(row => {
-                const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase();
-                const iQty = parseInt(row.querySelector('.rec-ing-qty').value);
-                if (iName && iQty > 0) ingredients.push({ name: iName, qty: iQty });
-            });
-            if(!name || !outName || outQty < 1 || ingredients.length === 0) return showModal({type:'error', title:'Data Kurang', message:'Nama, Output, dan minimal 1 Bahan valid wajib diisi.'});
-            
-            const recipeData = { name, outputName: outName, outputQty: outQty, ingredients, updated_at: serverTimestamp() };
-            try {
-                if (id) { await updateDoc(doc(db, "recipes", id), recipeData); showModal({ type: 'success', title: 'Sukses', message: 'Resep diperbarui.' }); } 
-                else { await addDoc(collection(db, "recipes"), recipeData); showModal({ type: 'success', title: 'Sukses', message: 'Resep baru dibuat.' }); }
-                recipeFormContainer.classList.add('hidden');
-            } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); }
-        });
+        // --- 8. CRUD INVENTORY (SHARED) ---
+        window.addIngredientRow = function(name='',qty=1) { ingredientsListContainer.insertAdjacentHTML('beforeend', `<div class="flex gap-2 mb-2 items-center ingredient-row"><input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" value="${name}"><input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}"><button type="button" onclick="this.parentElement.remove()" class="text-red-500"><i class="fa-solid fa-xmark"></i></button></div>`); };
+        document.getElementById('btnOpenRecipeForm').onclick = () => { recipeFormContainer.classList.remove('hidden'); ingredientsListContainer.innerHTML=''; addIngredientRow(); };
+        document.getElementById('btnCloseRecipeForm').onclick = () => recipeFormContainer.classList.add('hidden');
+        document.getElementById('btnAddIngredient').onclick = () => addIngredientRow();
+        document.getElementById('recipeForm').onsubmit = async (e) => { e.preventDefault(); /* ... same as previous ... */ const name = document.getElementById('recipeName').value.trim().toUpperCase(); const outName = document.getElementById('recOutName').value.trim().toUpperCase(); const outQty = parseInt(document.getElementById('recOutQty').value); let ingredients = []; document.querySelectorAll('.ingredient-row').forEach(row => { const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase(); const iQty = parseInt(row.querySelector('.rec-ing-qty').value); if(iName && iQty>0) ingredients.push({name:iName, qty:iQty}); }); if(!name || !outName || ingredients.length===0) return showModal({type:'error', title:'Error', message:'Data resep kurang.'}); const id = document.getElementById('recipeId').value; const data = {name, outputName:outName, outputQty:outQty, ingredients, updated_at: serverTimestamp()}; try { if(id) await updateDoc(doc(db,"recipes",id), data); else await addDoc(collection(db,"recipes"),data); recipeFormContainer.classList.add('hidden'); showModal({type:'success', title:'Sukses', message:'Resep disimpan.'}); } catch(e){showModal({type:'error', title:'Gagal', message:e.message});} };
+        window.deleteRecipe = (id) => { showModal({type:'delete', title:'Hapus?', message:'Hapus resep ini?', useInput:false, onConfirm: async() => { await deleteDoc(doc(db,"recipes",id)); showModal({type:'success', title:'Dihapus', message:'Resep dihapus.'}); }}); };
+        window.editRecipe = (id) => { const r = recipes.find(x=>x.id===id); if(!r)return; document.getElementById('recipeId').value=id; document.getElementById('recipeName').value=r.name; document.getElementById('recOutName').value=r.outputName; document.getElementById('recOutQty').value=r.outputQty; ingredientsListContainer.innerHTML=''; r.ingredients.forEach(i=>addIngredientRow(i.name, i.qty)); recipeFormContainer.classList.remove('hidden'); };
 
-        window.editRecipe = function(id) {
-            const recipe = recipes.find(r => r.id === id);
-            if(!recipe) return;
-            document.getElementById('recipeId').value = id;
-            document.getElementById('recipeName').value = recipe.name;
-            document.getElementById('recOutName').value = recipe.outputName;
-            document.getElementById('recOutQty').value = recipe.outputQty;
-            ingredientsListContainer.innerHTML = '';
-            if (recipe.ingredients && recipe.ingredients.length > 0) recipe.ingredients.forEach(ing => addIngredientRow(ing.name, ing.qty)); else addIngredientRow();
-            document.getElementById('formTitle').innerText = 'Edit Resep';
-            recipeFormContainer.classList.remove('hidden'); recipeFormContainer.scrollIntoView({ behavior: 'smooth' });
-        }
-        window.deleteRecipe = function(id) {
-            if (!currentUser) return;
-            showModal({ type: 'delete', title: 'Hapus Resep?', message: 'Resep ini akan dihapus permanen.', useInput: false, onConfirm: async () => { try { await deleteDoc(doc(db, "recipes", id)); showModal({ type: 'success', title: 'Terhapus', message: 'Resep dihapus.' }); } catch(e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } } })
-        }
-
-        // --- 9. INVENTORY CRUD & UI ---
         document.getElementById('itemName').addEventListener('input', function() { this.value = this.value.toUpperCase(); });
-        
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Menunggu koneksi auth..." });
+            if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Auth required." });
             const pic = document.getElementById('picName').value.trim();
             const name = document.getElementById('itemName').value.trim().toUpperCase(); 
             const action = document.getElementById('actionType').value;
             const inputQty = parseInt(document.getElementById('itemQty').value);
             const note = document.getElementById('itemNote').value.trim();
-            if (!pic || !name || isNaN(inputQty) || inputQty < 0) return showModal({ type: 'error', title: 'Data Kurang', message: "Mohon lengkapi data." });
+            if (!pic || !name || isNaN(inputQty) || inputQty < 0) return showModal({ type: 'error', title: 'Error', message: "Data tidak lengkap." });
             
             const btnSubmit = form.querySelector('button[type="submit"]');
-            btnSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
-            btnSubmit.disabled = true;
+            btnSubmit.innerHTML = 'Processing...'; btnSubmit.disabled = true;
             try {
                 const qSearch = query(collection(db, "items"), where("name", "==", name));
                 const querySnapshot = await getDocs(qSearch);
-                let prevQty = 0, finalQty = 0, changeTxt = "", logType = "UPDATE";
+                let prevQty = 0, finalQty = 0, changeTxt = "";
                 if (!querySnapshot.empty) {
                     const docRef = querySnapshot.docs[0];
                     const currentQty = parseInt(docRef.data().qty);
                     prevQty = currentQty;
                     if (action === 'add') { finalQty = currentQty + inputQty; changeTxt = `+ ${inputQty}`; }
                     else if (action === 'remove') { if (currentQty < inputQty) throw new Error("Stok kurang!"); finalQty = currentQty - inputQty; changeTxt = `- ${inputQty}`; }
-                    else if (action === 'set') { finalQty = inputQty; const diff = inputQty - currentQty; changeTxt = diff >= 0 ? `Set: +${diff}` : `Set: ${diff}`; }
+                    else if (action === 'set') { finalQty = inputQty; changeTxt = `Set: ${inputQty}`; }
                     await updateDoc(doc(db, "items", docRef.id), { qty: finalQty });
                 } else {
                     if (action === 'remove') throw new Error("Item baru tidak bisa dikurangi.");
-                    finalQty = inputQty; changeTxt = `New: +${inputQty}`; logType = "CREATE";
+                    finalQty = inputQty; changeTxt = `New: +${inputQty}`;
                     await addDoc(collection(db, "items"), { name: name, qty: finalQty, created_at: serverTimestamp() });
                 }
-                await addLog(name, prevQty, changeTxt, finalQty, logType, pic, note);
+                await addLog(name, prevQty, changeTxt, finalQty, "UPDATE", pic, note);
                 showModal({ type: 'success', title: 'Berhasil', message: `Item ${name} diperbarui.` });
-                document.getElementById('itemQty').value = 1; document.getElementById('itemNote').value = ''; document.getElementById('actionType').value = 'add';
+                document.getElementById('itemQty').value = 1; document.getElementById('itemNote').value = ''; 
             } catch (err) { showModal({ type: 'error', title: 'Gagal', message: err.message }); }
-            finally { btnSubmit.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database'; btnSubmit.disabled = false; }
+            finally { btnSubmit.innerHTML = 'Eksekusi Database'; btnSubmit.disabled = false; }
         });
 
-        // Click delegation for buttons in List and Grid AND Auto-fill logic
+        // Click delegation
         const handleInventoryClick = (e) => {
-            // 1. Check Button First
             const btn = e.target.closest('button');
             if (btn) {
                 const id = btn.dataset.id;
@@ -544,130 +597,76 @@
                 } else if (btn.classList.contains('btn-delete')) {
                     deleteItem(id, name, qty);
                 }
-                return; // Exit if button handled
+                return;
             }
-
-            // 2. Check Row/Card Click (Auto-fill)
             const row = e.target.closest('tr');
             const card = e.target.closest('.group'); 
-            
             let itemName = null;
-            if (row && inventoryTable.contains(row)) {
-                itemName = row.getAttribute('data-name');
-            } else if (card && inventoryGrid.contains(card)) {
-                itemName = card.getAttribute('data-name');
-            }
-
+            if (row && inventoryTable.contains(row)) itemName = row.getAttribute('data-name');
+            else if (card && inventoryGrid.contains(card)) itemName = card.getAttribute('data-name');
             if (itemName) {
                 document.getElementById('itemName').value = itemName;
                 document.getElementById('itemQty').focus();
                 document.querySelector('.bg-cartel-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
         };
-
         inventoryTable.addEventListener('click', handleInventoryClick);
         inventoryGrid.addEventListener('click', handleInventoryClick);
 
-        async function deleteItem(id, name, qty) {
-            showModal({ type: 'delete', title: 'Hapus Item?', message: `Hapus permanen "${name}"?`, useInput: true, onConfirm: async (picValue) => { try { await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue); await deleteDoc(doc(db, "items", id)); showModal({ type: 'success', title: 'Dihapus', message: 'Item berhasil dihapus.' }); } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } } });
-        }
-        document.getElementById('btnClearLogs').addEventListener('click', () => { showModal({ type: 'delete', title: 'Hapus Log?', message: 'Hapus SEMUA riwayat log?', useInput: true, onConfirm: async (picValue) => { try { const snap = await getDocs(collection(db, "logs")); if (snap.empty) return showModal({type:'error', title:'Info', message:'Log kosong.'}); const batch = writeBatch(db); snap.forEach(d => batch.delete(d.ref)); await batch.commit(); showModal({type:'success', title:'Bersih', message:'Semua log dihapus.'}); addLog("SYSTEM", 0, "RESET LOGS", 0, "SYSTEM", picValue); } catch(e) { showModal({type:'error', title:'Gagal', message:e.message}); } } }); });
+        async function deleteItem(id, name, qty) { showModal({ type: 'delete', title: 'Hapus?', message: `Hapus permanen ${name}?`, useInput: true, onConfirm: async (pic) => { await addLog(name, qty, "DELETED", 0, "DELETED", pic); await deleteDoc(doc(db, "items", id)); showModal({type:'success', title:'Dihapus', message:'Item dihapus.'}); } }); }
+        document.getElementById('btnClearLogs').addEventListener('click', () => { showModal({ type: 'delete', title: 'Hapus Log?', message: 'Hapus SEMUA log?', useInput: true, onConfirm: async (pic) => { const batch = writeBatch(db); const snap = await getDocs(collection(db, "logs")); snap.forEach(d => batch.delete(d.ref)); await batch.commit(); addLog("SYSTEM", 0, "RESET", 0, "SYSTEM", pic); showModal({type:'success', title:'Bersih', message:'Log dihapus.'}); } }); });
         async function addLog(name, prev, change, after, type, pic, note = "") { await addDoc(collection(db, "logs"), { name, prev, change, after, type, pic, note, timestamp: serverTimestamp() }); }
 
         // --- RENDER FUNCTIONS ---
         function renderRow(id, item, tbody) {
             const row = document.createElement('tr');
-            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800 cursor-pointer'; // Add cursor-pointer
-            row.setAttribute('data-name', item.name); // Add data-name
-            row.innerHTML = `<td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td><td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td><td class="p-4 text-right"><div class="flex justify-end gap-2"><button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button><button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button></div></td>`;
+            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800 cursor-pointer'; 
+            row.setAttribute('data-name', item.name); 
+            row.innerHTML = `<td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td><td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td><td class="p-4 text-right"><div class="flex justify-end gap-2"><button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}" data-id="${id}"><i class="fa-solid fa-pen"></i></button><button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button></div></td>`;
             tbody.appendChild(row);
         }
-
         function renderGridCard(id, item, container) {
             const icon = getIconForName(item.name);
             const card = document.createElement('div');
-            card.className = 'bg-cartel-panel border border-cartel-border rounded-lg p-4 shadow-lg hover:border-cartel-gold/50 transition relative overflow-hidden group cursor-pointer'; // Add cursor-pointer
-            card.setAttribute('data-name', item.name); // Add data-name
-            card.innerHTML = `
-                <div class="absolute top-[-10px] right-[-10px] text-6xl text-white opacity-5 pointer-events-none rotate-12 group-hover:opacity-10 transition"><i class="fa-solid ${icon}"></i></div>
-                <div class="flex justify-between items-start mb-2 relative z-10">
-                    <div class="w-10 h-10 rounded-full bg-black border border-cartel-border flex items-center justify-center text-cartel-gold text-lg"><i class="fa-solid ${icon}"></i></div>
-                    <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition">
-                        <button class="btn-edit text-xs bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-300 px-2 py-1 rounded" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button>
-                        <button class="btn-delete text-xs bg-gray-800 hover:bg-red-900 hover:text-white text-red-500 px-2 py-1 rounded" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button>
-                    </div>
-                </div>
-                <h3 class="font-bold text-white text-sm truncate mb-1 relative z-10">${item.name}</h3>
-                <div class="text-right border-t border-gray-800 pt-2 relative z-10">
-                    <span class="text-xs text-gray-500 block uppercase">Stok Saat Ini</span>
-                    <span class="font-mono text-xl text-cartel-gold font-bold">${parseInt(item.qty).toLocaleString('id-ID')}</span>
-                </div>
-            `;
+            card.className = 'bg-cartel-panel border border-cartel-border rounded-lg p-4 shadow-lg hover:border-cartel-gold/50 transition relative overflow-hidden group cursor-pointer'; 
+            card.setAttribute('data-name', item.name); 
+            card.innerHTML = `<div class="absolute top-[-10px] right-[-10px] text-6xl text-white opacity-5 pointer-events-none rotate-12 group-hover:opacity-10 transition"><i class="fa-solid ${icon}"></i></div><div class="flex justify-between items-start mb-2 relative z-10"><div class="w-10 h-10 rounded-full bg-black border border-cartel-border flex items-center justify-center text-cartel-gold text-lg"><i class="fa-solid ${icon}"></i></div><div class="flex gap-1 opacity-0 group-hover:opacity-100 transition"><button class="btn-edit text-xs bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-300 px-2 py-1 rounded" data-name="${item.name}" data-qty="${item.qty}" data-id="${id}"><i class="fa-solid fa-pen"></i></button><button class="btn-delete text-xs bg-gray-800 hover:bg-red-900 hover:text-white text-red-500 px-2 py-1 rounded" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button></div></div><h3 class="font-bold text-white text-sm truncate mb-1 relative z-10">${item.name}</h3><div class="text-right border-t border-gray-800 pt-2 relative z-10"><span class="text-xs text-gray-500 block uppercase">Stok Saat Ini</span><span class="font-mono text-xl text-cartel-gold font-bold">${parseInt(item.qty).toLocaleString('id-ID')}</span></div>`;
             container.appendChild(card);
         }
-
-        function renderLogCard(id, log, container, isCraftingView = false) {
+        function renderLogCard(id, log, container, isCraftingView) {
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
-            let changeClass = "text-cartel-gold";
-            if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
-            else if (String(log.change).includes('+')) changeClass = "text-green-500";
-            
-            let detailsHTML = '';
-            if (isCraftingView && log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
-                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td></tr>`).join('');
-                detailsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-            }
-            let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
-
-            const html = `
-                <div class="fade-in mb-6 relative group">
-                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
-                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
-                        <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
-                        <div class="p-5 relative z-10 bg-[#121212]">
-                            <div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div>
-                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
-                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div>
-                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono ${changeClass} font-bold text-lg">${log.change}</div></div>
-                                <div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div>
-                            </div>
-                            ${detailsHTML} ${noteHTML}
-                            <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div>
-                        </div>
-                        <div class="h-1.5 w-full ${log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':'bg-cartel-gold')}"></div>
-                    </div>
-                </div>`;
+            const uniqueLogId = `log-${id}`;
+            const html = `<div class="fade-in mb-6 relative group"><div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full"><div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='SALE'?'bg-green-500':(log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold'))}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div><div class="p-5 relative z-10 bg-[#121212]"><div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div><div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2"><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono text-cartel-gold font-bold text-lg">${log.change}</div></div><div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div></div><div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div></div><div class="h-1.5 w-full ${log.type==='SALE'?'bg-green-900':(log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':'bg-cartel-gold'))}"></div></div></div>`;
             container.insertAdjacentHTML('beforeend', html);
         }
-
         function renderCraftingLogCard(id, log, container) {
             const uniqueLogId = `craft-log-${id}`;
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
             let ingredientsHTML = '';
             if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
-                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td></tr>`).join('');
+                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} -> ${ing.after}</td></tr>`).join('');
                 ingredientsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
             }
-            let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
-
-            const html = `
-                <div class="fade-in mb-4 relative group">
-                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
-                    <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full">
-                        <div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500"></div><span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
-                        <div class="p-4 relative z-10 bg-[#121212]">
-                            <h3 class="text-lg font-bold text-white mb-3">${log.name}</h3>
-                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
-                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div>
-                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono text-green-500 font-bold">${log.change}</div></div>
-                                <div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold">${log.after}</div></div>
-                            </div>
-                            ${ingredientsHTML} ${noteHTML}
-                            <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span></div>
-                        </div>
-                        <div class="h-1.5 w-full bg-blue-900"></div>
+            const html = `<div class="fade-in mb-4 relative group"><div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1"><button onclick="deleteLog('${id}')" class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow hover:bg-red-700 flex items-center gap-1"><i class="fa-solid fa-trash"></i></button><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full"><div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500"></div><span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div><div class="p-4 relative z-10 bg-[#121212]"><h3 class="text-lg font-bold text-white mb-3">${log.name}</h3><div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2"><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono text-green-500 font-bold">${log.change}</div></div><div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold">${log.after}</div></div></div>${ingredientsHTML}<div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span></div></div><div class="h-1.5 w-full bg-blue-900"></div></div></div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        }
+        function renderSalesLogCard(id, log, container) {
+            const uniqueLogId = `sale-log-${id}`;
+            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
+            let itemsHTML = log.items.map(i => `
+                <div class="mb-1 border-b border-gray-300 pb-1 last:border-0">
+                    <div class="flex justify-between text-[10px] text-gray-800 font-bold mb-0.5">
+                        <span>${i.name} x${i.qty}</span>
+                        <span class="font-mono">${formatMoney(i.subtotal)}</span>
                     </div>
-                </div>`;
+                    ${(i.before !== undefined && i.after !== undefined) ? 
+                        `<div class="flex justify-between text-[8px] text-gray-500 font-mono">
+                            <span>Stok: ${i.before} <i class="fa-solid fa-arrow-right mx-0.5"></i> ${i.after}</span>
+                        </div>` : ''}
+                </div>
+            `).join('');
+            let noteHTML = log.note ? `<div class="text-[9px] text-gray-500 italic mt-1 border-t border-dashed border-gray-700 pt-1">"${log.note}"</div>` : '';
+            const html = `<div class="fade-in mb-4 relative group"><div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1"><button onclick="deleteLog('${id}')" class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow hover:bg-red-700 flex items-center gap-1"><i class="fa-solid fa-trash"></i></button><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#e6e6e6] text-black rounded-lg overflow-hidden border border-gray-400 shadow-2xl w-full font-mono relative"><div class="p-4 border-b border-gray-300 border-dashed text-center"><h3 class="font-bold text-lg uppercase tracking-widest">VIKRAMA RECEIPT</h3><p class="text-[10px] text-gray-600">${dateStr}</p><p class="text-[10px] text-gray-600">PIC: ${log.pic}</p></div><div class="p-4 bg-white min-h-[100px]"><div class="mb-3 text-xs font-bold border-b border-black pb-1">ITEM SALES</div>${itemsHTML}<div class="mt-4 pt-2 border-t border-black flex justify-between items-center"><span class="font-bold text-sm">TOTAL</span><span class="font-bold text-lg">${formatMoney(log.totalPrice)}</span></div><div class="mt-1 flex justify-between items-center text-[10px] text-gray-500"><span>Profit Est.</span><span>${formatMoney(log.profit)}</span></div><div class="mt-4 bg-gray-100 p-2 rounded text-center"><span class="block text-[9px] text-gray-500">PEMBELI</span><span class="font-bold text-sm uppercase">${log.buyer}</span></div>${noteHTML}</div><div class="bg-gray-200 p-2 text-center text-[9px] text-gray-500 border-t border-gray-300">THANK YOU FOR YOUR BUSINESS</div><div class="absolute bottom-0 left-0 right-0 h-1 bg-[linear-gradient(45deg,transparent_75%,#0f0f0f_75%),linear-gradient(-45deg,transparent_75%,#0f0f0f_75%)] bg-[length:10px_10px]"></div></div></div>`;
             container.insertAdjacentHTML('beforeend', html);
         }
 
@@ -689,72 +688,22 @@
         btnModalCancel.addEventListener('click', closeModal);
         btnModalConfirm.addEventListener('click', () => { if (modalConfirmCallback) { const val = document.getElementById('modalInput').value.trim(); if (!document.getElementById('modalInputContainer').classList.contains('hidden') && !val) return; modalConfirmCallback(val); } closeModal(); });
         
-        // FIX: Use Blob instead of Base64 for large images to prevent corruption
+        // Capture Report
         window.captureReport = function(elementId) {
             const element = document.getElementById(elementId);
-            if(!element) {
-                console.error("Element tidak ditemukan:", elementId);
-                alert("Gagal menemukan elemen log. ID: " + elementId);
-                return;
-            }
-
+            if(!element) return;
             const parentGroup = element.closest('.group');
             const btn = parentGroup ? parentGroup.querySelector('button[onclick*="captureReport"]') : null;
             const originalContent = btn ? btn.innerHTML : '';
-            
-            if(btn) {
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-                btn.disabled = true;
-            }
-
+            if(btn) { btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>'; btn.disabled = true; }
             setTimeout(() => {
-                html2canvas(element, { 
-                    scale: 2, 
-                    backgroundColor: '#121212', 
-                    useCORS: true,
-                    logging: false,
-                    allowTaint: true,
-                    removeContainer: true
-                }).then(canvas => {
+                html2canvas(element, { scale: 2, backgroundColor: '#121212', useCORS: true, logging: false }).then(canvas => {
                     canvas.toBlob(function(blob) {
-                        if (!blob) {
-                            alert("Gagal membuat file gambar.");
-                            if(btn) {
-                                btn.innerHTML = originalContent;
-                                btn.disabled = false;
-                            }
-                            return;
-                        }
-                        
                         const url = URL.createObjectURL(blob);
-                        const link = document.createElement('a');
-                        link.download = `Vikrama_Log_${Date.now()}.png`;
-                        link.href = url;
-                        link.style.display = 'none';
-                        
-                        document.body.appendChild(link); 
-                        link.click();
-                        
-                        setTimeout(() => {
-                            document.body.removeChild(link);
-                            URL.revokeObjectURL(url);
-                        }, 100);
-
-                        if(btn) {
-                            btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
-                            btn.disabled = false;
-                            setTimeout(() => {
-                                btn.innerHTML = originalContent;
-                            }, 2000);
-                        }
+                        const link = document.createElement('a'); link.download = `Vikrama_Log_${Date.now()}.png`; link.href = url;
+                        document.body.appendChild(link); link.click(); setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 100);
+                        if(btn) { btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved'; btn.disabled = false; setTimeout(() => { btn.innerHTML = originalContent; }, 2000); }
                     }, 'image/png', 1.0);
-                }).catch(err => {
-                    console.error("Screenshot Error:", err);
-                    alert("Gagal mengambil screenshot: " + err.message);
-                    if(btn) {
-                        btn.innerHTML = originalContent;
-                        btn.disabled = false;
-                    }
                 });
             }, 100);
         }
@@ -794,6 +743,7 @@
                     <div class="flex gap-4 mt-1">
                         <button id="tab-inventory" onclick="switchTab('inventory')" class="text-xs font-bold uppercase tracking-wider bg-cartel-gold text-black px-3 py-1 rounded transition">Inventory</button>
                         <button id="tab-crafting" onclick="switchTab('crafting')" class="text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white px-3 py-1 rounded transition">Crafting</button>
+                        <button id="tab-sales" onclick="switchTab('sales')" class="text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white px-3 py-1 rounded transition">Sales (POS)</button>
                     </div>
                 </div>
             </div>
@@ -947,6 +897,72 @@
             </main>
         </div>
 
+        <!-- VIEW: SALES (NEW) -->
+        <div id="view-sales" class="w-full hidden">
+            <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <!-- Sales Catalog & POS -->
+                <section class="lg:col-span-8 flex flex-col gap-6">
+                    <div class="bg-cartel-panel p-6 rounded-lg border border-cartel-border shadow-lg">
+                        <div class="flex justify-between items-center mb-4 border-b border-cartel-border pb-4">
+                            <h2 class="text-cartel-gold text-lg font-bold flex items-center gap-2">
+                                <i class="fa-solid fa-store"></i> Point of Sales
+                            </h2>
+                            <button onclick="openConfigModal()" class="text-xs bg-gray-800 hover:bg-cartel-gold hover:text-black px-3 py-2 rounded font-bold transition flex items-center gap-2">
+                                <i class="fa-solid fa-gear"></i> KELOLA PRODUK
+                            </button>
+                        </div>
+                        
+                        <!-- Catalog Grid -->
+                        <div id="salesCatalog" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[500px] overflow-y-auto pr-2">
+                            <!-- Items injected by JS -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Cart & Checkout -->
+                <section class="lg:col-span-4 flex flex-col gap-4">
+                    <!-- Cart -->
+                    <div class="bg-cartel-panel p-4 rounded-lg border border-cartel-border shadow-lg">
+                        <h3 class="text-sm font-bold text-white mb-4 flex justify-between">
+                            <span>KERANJANG</span>
+                            <span class="text-cartel-gold"><i class="fa-solid fa-cart-shopping"></i></span>
+                        </h3>
+                        
+                        <div id="cartItems" class="space-y-2 mb-4 max-h-[250px] overflow-y-auto pr-1">
+                            <p class="text-center text-xs text-gray-600 py-4">Keranjang kosong</p>
+                        </div>
+
+                        <div class="border-t border-gray-700 pt-3 space-y-3">
+                            <div class="flex justify-between items-center text-lg font-bold">
+                                <span>TOTAL</span>
+                                <span id="cartTotal" class="text-cartel-gold">$0</span>
+                            </div>
+                            
+                            <div class="space-y-2">
+                                <input type="text" id="salePic" placeholder="PIC (Penanggung Jawab)" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-xs text-white">
+                                <input type="text" id="saleBuyer" placeholder="Nama Pembeli / Kelompok" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-xs text-white">
+                                <textarea id="saleNote" placeholder="Catatan Tambahan (Opsional)" class="w-full bg-black border border-gray-700 px-3 py-2 rounded text-xs text-white h-16 resize-none"></textarea>
+                            </div>
+
+                            <button id="btnCheckout" onclick="processCheckout()" disabled class="w-full bg-cartel-gold text-black font-bold py-3 rounded opacity-50 cursor-not-allowed hover:bg-yellow-500 transition">
+                                PROSES TRANSAKSI
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Sales History -->
+                    <div class="bg-cartel-panel p-4 rounded-lg border border-cartel-border shadow-lg flex-grow">
+                        <h3 class="text-xs text-gray-500 uppercase font-bold tracking-wider mb-2 pb-2 border-b border-gray-800">
+                            Riwayat Penjualan
+                        </h3>
+                        <div id="salesHistoryContainer" class="max-h-[300px] overflow-y-auto pr-2 space-y-4">
+                            <!-- Logs injected here -->
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
     </div>
 
     <!-- MODAL CONFIRMATION DIALOG -->
@@ -962,6 +978,26 @@
             <div class="flex gap-3 justify-center">
                 <button id="btnModalCancel" class="hidden px-4 py-2 rounded border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800 transition text-sm font-bold uppercase">Batal</button>
                 <button id="btnModalConfirm" class="px-6 py-2 rounded bg-cartel-gold text-black font-bold hover:bg-yellow-500 transition shadow-lg uppercase tracking-wider">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PRODUCT CONFIG -->
+    <div id="configModal" class="fixed inset-0 bg-black/95 z-50 hidden flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-[#1a1a1a] border border-cartel-gold rounded-lg p-0 max-w-lg w-full mx-4 shadow-2xl flex flex-col max-h-[80vh]">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-bold text-cartel-gold uppercase"><i class="fa-solid fa-tags mr-2"></i> Konfigurasi Produk Jual</h3>
+                <button onclick="closeConfigModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-xmark fa-lg"></i></button>
+            </div>
+            
+            <div class="flex-grow overflow-y-auto p-4" id="configListContainer">
+                <!-- List items injected JS -->
+            </div>
+
+            <div class="p-4 border-t border-gray-700 bg-black/20">
+                <button id="btnSaveConfig" onclick="saveConfig()" class="w-full bg-cartel-gold text-black font-bold py-2 rounded hover:bg-yellow-500 transition">
+                    SIMPAN PERUBAHAN
+                </button>
             </div>
         </div>
     </div>
