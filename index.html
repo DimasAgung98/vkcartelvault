@@ -10,10 +10,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Html2Canvas
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script> -->
     <!-- Html2Canvas - Versi Stabil -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" xintegrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- FIREBASE SDK -->
     <script type="module">
@@ -78,7 +76,7 @@
         const ingredientsListContainer = document.getElementById('ingredientsListContainer');
         const btnAddIngredient = document.getElementById('btnAddIngredient');
 
-        // --- UI HELPERS (DIPERBAIKI: Ditambahkan kembali agar tidak error) ---
+        // --- UI HELPERS ---
         function showError(msg) {
             if (errorBanner) {
                 errorBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${msg}`;
@@ -122,7 +120,7 @@
                         currentUser = user;
                         statusEl.innerText = "SYSTEM ONLINE";
                         statusEl.className = "text-xs text-green-500 font-bold uppercase";
-                        hideError(); // Sekarang fungsi ini sudah ada
+                        hideError(); 
                         await fetchSystemPin();
                         document.getElementById('loginStatus').innerText = "System Connected. Masukkan PIN.";
                         document.getElementById('loginStatus').className = "text-center text-xs text-green-500 font-mono mt-2";
@@ -142,17 +140,6 @@
                 else { await setDoc(pinDocRef, { pin: "1234" }); systemPin = "1234"; }
             } catch (e) { console.error("PIN Error:", e); }
         }
-
-        // Test apakah html2canvas loaded
-window.testHtml2Canvas = function() {
-    if (typeof html2canvas === 'undefined') {
-        alert('❌ Html2Canvas TIDAK LOADED! Periksa koneksi internet.');
-        return false;
-    } else {
-        alert('✅ Html2Canvas berhasil loaded!');
-        return true;
-    }
-}
 
         // --- 2. PIN LOGIC ---
         window.checkPin = function() {
@@ -292,10 +279,7 @@ window.testHtml2Canvas = function() {
                     const invLogContainer = document.getElementById('reportHistoryContainer');
                     const craftLogContainer = document.getElementById('craftingHistoryContainer');
                     
-                    if (!invLogContainer || !craftLogContainer) {
-                        console.error("❌ Container log tidak ditemukan!");
-                        return;
-                    }
+                    if (!invLogContainer || !craftLogContainer) return;
                     
                     invLogContainer.innerHTML = ''; 
                     craftLogContainer.innerHTML = '';
@@ -304,16 +288,12 @@ window.testHtml2Canvas = function() {
                         const log = docSnap.data();
                         const logId = docSnap.id;
                         
-                        // Render ke Inventory History
                         renderLogCard(logId, log, invLogContainer, false);
                         
-                        // Render ke Crafting History dengan fungsi khusus
                         if (log.type === 'CRAFTING') {
                             renderCraftingLogCard(logId, log, craftLogContainer);
                         }
                     });
-                    
-                    console.log("✅ Logs rendered. Crafting logs:", document.querySelectorAll('#craftingHistoryContainer [id^="log-"]').length);
                 });
 
             // RECIPES LISTENER
@@ -548,24 +528,45 @@ window.testHtml2Canvas = function() {
             finally { btnSubmit.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Eksekusi Database'; btnSubmit.disabled = false; }
         });
 
-        // Click delegation for buttons in List and Grid
-        const handleItemAction = (e) => {
-            const target = e.target.closest('button');
-            if (!target) return;
-            const id = target.dataset.id;
-            const name = target.dataset.name;
-            const qty = parseInt(target.dataset.qty);
-            if (target.classList.contains('btn-edit')) {
-                document.getElementById('itemName').value = name;
-                document.getElementById('itemQty').value = qty;
-                document.getElementById('actionType').value = 'set';
-                document.getElementById('itemName').focus();
-            } else if (target.classList.contains('btn-delete')) {
-                deleteItem(id, name, qty);
+        // Click delegation for buttons in List and Grid AND Auto-fill logic
+        const handleInventoryClick = (e) => {
+            // 1. Check Button First
+            const btn = e.target.closest('button');
+            if (btn) {
+                const id = btn.dataset.id;
+                const name = btn.dataset.name;
+                const qty = parseInt(btn.dataset.qty);
+                if (btn.classList.contains('btn-edit')) {
+                    document.getElementById('itemName').value = name;
+                    document.getElementById('itemQty').value = qty;
+                    document.getElementById('actionType').value = 'set';
+                    document.getElementById('itemName').focus();
+                } else if (btn.classList.contains('btn-delete')) {
+                    deleteItem(id, name, qty);
+                }
+                return; // Exit if button handled
+            }
+
+            // 2. Check Row/Card Click (Auto-fill)
+            const row = e.target.closest('tr');
+            const card = e.target.closest('.group'); 
+            
+            let itemName = null;
+            if (row && inventoryTable.contains(row)) {
+                itemName = row.getAttribute('data-name');
+            } else if (card && inventoryGrid.contains(card)) {
+                itemName = card.getAttribute('data-name');
+            }
+
+            if (itemName) {
+                document.getElementById('itemName').value = itemName;
+                document.getElementById('itemQty').focus();
+                document.querySelector('.bg-cartel-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
         };
-        inventoryTable.addEventListener('click', handleItemAction);
-        inventoryGrid.addEventListener('click', handleItemAction);
+
+        inventoryTable.addEventListener('click', handleInventoryClick);
+        inventoryGrid.addEventListener('click', handleInventoryClick);
 
         async function deleteItem(id, name, qty) {
             showModal({ type: 'delete', title: 'Hapus Item?', message: `Hapus permanen "${name}"?`, useInput: true, onConfirm: async (picValue) => { try { await addLog(name, qty, "DIMUSNAHKAN", 0, "DELETED", picValue); await deleteDoc(doc(db, "items", id)); showModal({ type: 'success', title: 'Dihapus', message: 'Item berhasil dihapus.' }); } catch (e) { showModal({ type: 'error', title: 'Gagal', message: e.message }); } } });
@@ -576,7 +577,8 @@ window.testHtml2Canvas = function() {
         // --- RENDER FUNCTIONS ---
         function renderRow(id, item, tbody) {
             const row = document.createElement('tr');
-            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800';
+            row.className = 'hover:bg-gray-800/50 transition duration-200 group border-b border-gray-800 cursor-pointer'; // Add cursor-pointer
+            row.setAttribute('data-name', item.name); // Add data-name
             row.innerHTML = `<td class="p-4 font-semibold text-gray-200 group-hover:text-white">${item.name}</td><td class="p-4 text-center font-mono text-cartel-gold text-lg tracking-wide">${parseInt(item.qty).toLocaleString('id-ID')}</td><td class="p-4 text-right"><div class="flex justify-end gap-2"><button class="btn-edit bg-gray-800 hover:bg-cartel-gold hover:text-black text-gray-400 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-pen"></i></button><button class="btn-delete bg-gray-800 hover:bg-red-900 hover:text-white text-red-700 px-3 py-1.5 rounded transition text-xs font-bold border border-gray-700" data-id="${id}" data-name="${item.name}" data-qty="${item.qty}"><i class="fa-solid fa-trash"></i></button></div></td>`;
             tbody.appendChild(row);
         }
@@ -584,7 +586,8 @@ window.testHtml2Canvas = function() {
         function renderGridCard(id, item, container) {
             const icon = getIconForName(item.name);
             const card = document.createElement('div');
-            card.className = 'bg-cartel-panel border border-cartel-border rounded-lg p-4 shadow-lg hover:border-cartel-gold/50 transition relative overflow-hidden group';
+            card.className = 'bg-cartel-panel border border-cartel-border rounded-lg p-4 shadow-lg hover:border-cartel-gold/50 transition relative overflow-hidden group cursor-pointer'; // Add cursor-pointer
+            card.setAttribute('data-name', item.name); // Add data-name
             card.innerHTML = `
                 <div class="absolute top-[-10px] right-[-10px] text-6xl text-white opacity-5 pointer-events-none rotate-12 group-hover:opacity-10 transition"><i class="fa-solid ${icon}"></i></div>
                 <div class="flex justify-between items-start mb-2 relative z-10">
@@ -604,20 +607,10 @@ window.testHtml2Canvas = function() {
         }
 
         function renderLogCard(id, log, container, isCraftingView = false) {
-            console.log("🔍 renderLogCard called:", {
-                id: id,
-                logType: log.type,
-                containerID: container.id,
-                isCraftingView: isCraftingView
-            });
-            
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
             let changeClass = "text-cartel-gold";
             if (String(log.change).includes('-') || log.type === "DELETED") changeClass = "text-red-500";
             else if (String(log.change).includes('+')) changeClass = "text-green-500";
-
-            const uniqueLogId = `log-${id}`;
-            console.log("📌 Generated uniqueLogId:", uniqueLogId, "for container:", container.id);
             
             let detailsHTML = '';
             if (isCraftingView && log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
@@ -627,13 +620,9 @@ window.testHtml2Canvas = function() {
             let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
 
             const html = `
-    <div class="fade-in mb-6 relative group">
-        <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
-                <i class="fa-solid fa-camera"></i> IMG
-            </button>
-        </div>
-        <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
+                <div class="fade-in mb-6 relative group">
+                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('log-${id}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
+                    <div id="log-${id}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full">
                         <div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold')}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
                         <div class="p-5 relative z-10 bg-[#121212]">
                             <div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div>
@@ -652,86 +641,35 @@ window.testHtml2Canvas = function() {
         }
 
         function renderCraftingLogCard(id, log, container) {
-    const uniqueLogId = `craft-log-${id}`;
-    console.log("🎯 Rendering CRAFTING log with ID:", uniqueLogId);
-    
-    let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
-    
-    let ingredientsHTML = '';
-    if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
-        let rows = log.ingredientsSnapshot.map(ing => 
-            `<tr class="border-b border-gray-800 last:border-0 text-[10px]">
-                <td class="py-1 text-gray-400">${ing.name}</td>
-                <td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td>
-                <td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td>
-            </tr>`
-        ).join('');
-        
-        ingredientsHTML = `
-            <div class="mt-3 bg-black/40 rounded p-2 border border-gray-800">
-                <table class="w-full">
-                    <thead>
-                        <tr class="text-[9px] text-gray-600 border-b border-gray-700">
-                            <th class="text-left pb-1">BAHAN</th>
-                            <th class="text-center pb-1">PAKAI</th>
-                            <th class="text-right pb-1">STOCK LOG</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>`;
-    }
-    
-    let noteHTML = log.note ? `
-        <div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1">
-            <i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"
-        </div>` : '';
+            const uniqueLogId = `craft-log-${id}`;
+            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
+            let ingredientsHTML = '';
+            if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
+                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} <i class="fa-solid fa-arrow-right text-[8px] mx-1"></i> ${ing.after}</td></tr>`).join('');
+                ingredientsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+            }
+            let noteHTML = log.note ? `<div class="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-500 italic flex items-start gap-1"><i class="fa-solid fa-note-sticky mt-0.5"></i> "${log.note}"</div>` : '';
 
-    const html = `
-        <div class="fade-in mb-4 relative group">
-            <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1">
-                    <i class="fa-solid fa-camera"></i> IMG
-                </button>
-            </div>
-            <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full">
-                <div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800">
-                    <div class="flex items-center gap-2">
-                        <div class="w-2 h-2 rounded-full bg-blue-500"></div>
-                        <span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span>
-                    </div>
-                    <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
-                </div>
-                <div class="p-4 relative z-10 bg-[#121212]">
-                    <h3 class="text-lg font-bold text-white mb-3">${log.name}</h3>
-                    <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
-                        <div class="p-2 text-center border-r border-gray-800">
-                            <div class="text-[9px] text-gray-500">AWAL</div>
-                            <div class="font-mono text-gray-400 font-bold">${log.prev}</div>
+            const html = `
+                <div class="fade-in mb-4 relative group">
+                    <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div>
+                    <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full">
+                        <div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500"></div><span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div>
+                        <div class="p-4 relative z-10 bg-[#121212]">
+                            <h3 class="text-lg font-bold text-white mb-3">${log.name}</h3>
+                            <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
+                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div>
+                                <div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono text-green-500 font-bold">${log.change}</div></div>
+                                <div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold">${log.after}</div></div>
+                            </div>
+                            ${ingredientsHTML} ${noteHTML}
+                            <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span></div>
                         </div>
-                        <div class="p-2 text-center border-r border-gray-800">
-                            <div class="text-[9px] text-gray-500">AKSI</div>
-                            <div class="font-mono text-green-500 font-bold">${log.change}</div>
-                        </div>
-                        <div class="p-2 text-center">
-                            <div class="text-[9px] text-gray-500">AKHIR</div>
-                            <div class="font-mono text-white font-bold">${log.after}</div>
-                        </div>
+                        <div class="h-1.5 w-full bg-blue-900"></div>
                     </div>
-                    ${ingredientsHTML}
-                    ${noteHTML}
-                    <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2">
-                        <span class="text-[10px] text-gray-500">PIC:</span>
-                        <span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span>
-                    </div>
-                </div>
-                <div class="h-1.5 w-full bg-blue-900"></div>
-            </div>
-        </div>`;
-    
-    container.insertAdjacentHTML('beforeend', html);
-    console.log("✅ Crafting log rendered:", uniqueLogId);
-}
+                </div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        }
 
         // Modal Logic
         window.showModal = function({ type, title, message, useInput, onConfirm }) {
@@ -753,79 +691,73 @@ window.testHtml2Canvas = function() {
         
         // FIX: Use Blob instead of Base64 for large images to prevent corruption
         window.captureReport = function(elementId) {
-    const element = document.getElementById(elementId);
-    if(!element) {
-        console.error("Element tidak ditemukan:", elementId);
-        alert("Gagal menemukan elemen log. ID: " + elementId);
-        return;
-    }
+            const element = document.getElementById(elementId);
+            if(!element) {
+                console.error("Element tidak ditemukan:", elementId);
+                alert("Gagal menemukan elemen log. ID: " + elementId);
+                return;
+            }
 
-    // Cari tombol dengan cara yang lebih robust
-    const parentGroup = element.closest('.group');
-    const btn = parentGroup ? parentGroup.querySelector('button[onclick*="captureReport"]') : null;
-    const originalContent = btn ? btn.innerHTML : '';
-    
-    // Visual Feedback (Loading)
-    if(btn) {
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-        btn.disabled = true;
-    }
+            const parentGroup = element.closest('.group');
+            const btn = parentGroup ? parentGroup.querySelector('button[onclick*="captureReport"]') : null;
+            const originalContent = btn ? btn.innerHTML : '';
+            
+            if(btn) {
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+                btn.disabled = true;
+            }
 
-    // Tambahkan delay kecil untuk memastikan rendering selesai
-    setTimeout(() => {
-        html2canvas(element, { 
-            scale: 2, 
-            backgroundColor: '#121212', 
-            useCORS: true,
-            logging: false,
-            allowTaint: true,
-            removeContainer: true
-        }).then(canvas => {
-            canvas.toBlob(function(blob) {
-                if (!blob) {
-                    alert("Gagal membuat file gambar.");
+            setTimeout(() => {
+                html2canvas(element, { 
+                    scale: 2, 
+                    backgroundColor: '#121212', 
+                    useCORS: true,
+                    logging: false,
+                    allowTaint: true,
+                    removeContainer: true
+                }).then(canvas => {
+                    canvas.toBlob(function(blob) {
+                        if (!blob) {
+                            alert("Gagal membuat file gambar.");
+                            if(btn) {
+                                btn.innerHTML = originalContent;
+                                btn.disabled = false;
+                            }
+                            return;
+                        }
+                        
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.download = `Vikrama_Log_${Date.now()}.png`;
+                        link.href = url;
+                        link.style.display = 'none';
+                        
+                        document.body.appendChild(link); 
+                        link.click();
+                        
+                        setTimeout(() => {
+                            document.body.removeChild(link);
+                            URL.revokeObjectURL(url);
+                        }, 100);
+
+                        if(btn) {
+                            btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
+                            btn.disabled = false;
+                            setTimeout(() => {
+                                btn.innerHTML = originalContent;
+                            }, 2000);
+                        }
+                    }, 'image/png', 1.0);
+                }).catch(err => {
+                    console.error("Screenshot Error:", err);
+                    alert("Gagal mengambil screenshot: " + err.message);
                     if(btn) {
                         btn.innerHTML = originalContent;
                         btn.disabled = false;
                     }
-                    return;
-                }
-                
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.download = `Vikrama_Log_${Date.now()}.png`;
-                link.href = url;
-                link.style.display = 'none';
-                
-                // PENTING: Append ke body agar browser mengizinkan download
-                document.body.appendChild(link); 
-                link.click();
-                
-                // Cleanup dengan delay
-                setTimeout(() => {
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(url);
-                }, 100);
-
-                // Feedback Sukses
-                if(btn) {
-                    btn.innerHTML = '<i class="fa-solid fa-check text-green-500"></i> Saved';
-                    btn.disabled = false;
-                    setTimeout(() => {
-                        btn.innerHTML = originalContent;
-                    }, 2000);
-                }
-            }, 'image/png', 1.0);
-        }).catch(err => {
-            console.error("Screenshot Error:", err);
-            alert("Gagal mengambil screenshot: " + err.message);
-            if(btn) {
-                btn.innerHTML = originalContent;
-                btn.disabled = false;
-            }
-        });
-    }, 100);
-}
+                });
+            }, 100);
+        }
     </script>
     <script>
         tailwind.config = { theme: { extend: { colors: { cartel: { bg: '#0f0f0f', panel: '#1a1a1a', border: '#333333', gold: '#d4af37' } }, animation: { shake: 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both' }, keyframes: { shake: { '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' }, '20%, 80%': { transform: 'translate3d(2px, 0, 0)' }, '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' }, '40%, 60%': { transform: 'translate3d(4px, 0, 0)' } } } } } }
