@@ -223,7 +223,7 @@
             if (name.includes('senjata') || name.includes('gun')) return 'fa-person-rifle';
             if (name.includes('ammo')) return 'fa-bullseye';
             if (name.includes('micin') || name.includes('meth')) return 'fa-icicles';
-            if (name.includes('hp')) return 'fa-mobile-screen';
+            if (name.includes('hp') || name.includes('mobile')) return 'fa-mobile-screen';
             if (name.includes('armor')) return 'fa-shield-halved';
             return 'fa-box-open';
         }
@@ -268,6 +268,7 @@
                     });
                 }
                 totalLabel.innerText = count;
+                // Only refresh crafting/sales if they are visible to avoid input interruptions
                 if (!viewCrafting.classList.contains('hidden')) updateCraftingUI();
                 if (!viewSales.classList.contains('hidden')) renderSalesCatalog();
             }, (error) => {
@@ -299,7 +300,10 @@
             onSnapshot(qRecipes, (snapshot) => {
                 recipes = [];
                 snapshot.forEach(docSnap => recipes.push({ id: docSnap.id, ...docSnap.data() }));
-                updateCraftingUI();
+                // Don't auto refresh whole UI if typing
+                if(document.activeElement.tagName !== "INPUT") {
+                    updateCraftingUI();
+                }
             });
         }
 
@@ -307,6 +311,12 @@
         function updateCraftingUI() {
             const container = document.getElementById('recipeContainer');
             if (!container) return;
+            // Kita akan menyimpan nilai input yang ada jika sedang render ulang agar tidak reset
+            const existingInputs = {};
+            container.querySelectorAll('input[type="number"]').forEach(inp => {
+                existingInputs[inp.id] = inp.value;
+            });
+
             container.innerHTML = '';
 
             if (recipes.length === 0) {
@@ -315,38 +325,140 @@
             }
 
             recipes.forEach(recipe => {
+                // Hitung Max Craftable (Multiplier/Set)
+                let maxCraftable = Infinity;
+                
                 let ingredientHTML = '';
-                recipe.ingredients.forEach(ing => {
-                    const stockItem = inventoryCache[ing.name.toLowerCase()];
-                    const currentQty = stockItem ? stockItem.qty : 0;
-                    const hasEnough = currentQty >= ing.qty;
+                recipe.ingredients.forEach((ing, index) => {
+                    const itemKey = ing.name.toLowerCase();
+                    const stockItem = inventoryCache[itemKey];
+                    const currentStock = stockItem ? stockItem.qty : 0;
+                    
+                    // Hitung max berdasarkan bahan ini
+                    const canMake = Math.floor(currentStock / ing.qty);
+                    if(canMake < maxCraftable) maxCraftable = canMake;
+
+                    const uniqueIngId = `ing-${recipe.id}-${index}`;
+                    
                     ingredientHTML += `
-                        <div class="flex justify-between text-xs mb-1 border-b border-gray-800 pb-1 last:border-0">
-                            <span class="text-gray-400">${ing.name} (x${ing.qty})</span>
-                            <span class="${hasEnough ? 'text-green-500' : 'text-red-500'} font-mono">Stok: ${currentQty}</span>
+                        <div class="flex justify-between text-xs mb-1 border-b border-gray-800 pb-1 last:border-0 items-center">
+                            <span class="text-gray-400 w-1/3 truncate">${ing.name}</span>
+                            <span class="text-right w-2/3 font-mono text-[10px]" id="${uniqueIngId}">
+                                Butuh: ${ing.qty} <span class="text-gray-600">/</span> Stok: <span class="${currentStock >= ing.qty ? 'text-green-500' : 'text-red-500'}">${currentStock}</span>
+                            </span>
+                            <input type="hidden" class="ing-req-base" data-base="${ing.qty}" data-stock="${currentStock}" data-target="${uniqueIngId}">
                         </div>`;
                 });
 
+                if(maxCraftable === Infinity) maxCraftable = 0;
+
+                // Hitung Total Output Maksimal untuk display
+                const maxTotalOutput = maxCraftable * recipe.outputQty;
+                const prevValue = existingInputs[`qty-${recipe.id}`] || 1;
+
                 const card = document.createElement('div');
-                card.className = `bg-cartel-panel border border-cartel-border hover:border-cartel-gold/30 rounded-lg p-5 shadow-lg relative overflow-hidden group transition`;
+                card.className = `bg-cartel-panel border border-cartel-border hover:border-cartel-gold/30 rounded-lg p-5 shadow-lg relative overflow-hidden group transition flex flex-col h-full`;
                 card.innerHTML = `
-                    <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                    <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition z-10">
                         <button onclick="editRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-gray-300 px-2 py-1 rounded hover:bg-cartel-gold hover:text-black"><i class="fa-solid fa-pen"></i></button>
                         <button onclick="deleteRecipe('${recipe.id}')" class="text-xs bg-gray-800 text-red-500 px-2 py-1 rounded hover:bg-red-900 hover:text-white"><i class="fa-solid fa-trash"></i></button>
                     </div>
+                    
                     <h3 class="text-lg font-bold text-cartel-gold mb-1 truncate pr-16">${recipe.name}</h3>
-                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Output: <span class="text-white">${recipe.outputQty}x ${recipe.outputName}</span></p>
-                    <div class="bg-black/50 p-3 rounded mb-4 border border-gray-800 min-h-[60px]">${ingredientHTML}</div>
-                    <div class="flex gap-2 items-center">
-                        <div class="relative w-20">
-                            <input type="number" id="qty-${recipe.id}" min="1" value="1" class="w-full bg-black border border-cartel-border text-center text-white text-sm py-2 rounded focus:border-cartel-gold font-mono">
-                            <span class="absolute -top-2 left-1 text-[9px] bg-cartel-panel px-1 text-gray-500">Jumlah</span>
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Output/Resep: <span class="text-white">${recipe.outputQty}x ${recipe.outputName}</span></p>
+                    
+                    <div class="bg-black/50 p-3 rounded mb-4 border border-gray-800 flex-grow">
+                        <div class="text-[10px] text-gray-500 mb-2 font-bold border-b border-gray-700 pb-1">BAHAN BAKU</div>
+                        ${ingredientHTML}
+                    </div>
+
+                    <div class="mt-auto">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] text-gray-400">Max Output: <span class="text-green-500 font-bold font-mono">${maxTotalOutput} ${recipe.outputName}</span></span>
+                            <button onclick="setMaxCraft('${recipe.id}', ${maxCraftable})" class="text-[10px] bg-gray-800 hover:bg-gray-700 text-cartel-gold px-2 py-0.5 rounded border border-gray-700">MAX</button>
                         </div>
-                        <button onclick="processCraft('${recipe.id}')" class="flex-grow py-2 rounded font-bold text-sm uppercase tracking-wider transition shadow-lg bg-cartel-gold text-black hover:bg-yellow-500"><i class="fa-solid fa-hammer mr-2"></i> CRAFT</button>
+                        
+                        <!-- Realtime Estimation Display -->
+                        <div class="flex justify-between items-center bg-black/30 px-3 py-1.5 rounded border border-gray-800 mb-2">
+                            <span class="text-[10px] text-gray-500">Estimasi Hasil:</span>
+                            <span class="text-sm font-bold text-white"><span id="est-out-${recipe.id}">0</span> ${recipe.outputName}</span>
+                        </div>
+
+                        <div class="flex gap-2 items-center">
+                            <div class="relative w-20">
+                                <input type="number" id="qty-${recipe.id}" min="1" value="${prevValue}" 
+                                    data-output-qty="${recipe.outputQty}"
+                                    oninput="calculateRecipeCost('${recipe.id}')"
+                                    class="w-full bg-black border border-cartel-border text-center text-white text-sm py-2 rounded focus:border-cartel-gold font-mono focus:outline-none">
+                                <span class="absolute -top-2 left-1 text-[8px] bg-cartel-panel px-1 text-gray-500">Jml Proses</span>
+                            </div>
+                            <button id="btn-craft-${recipe.id}" onclick="processCraft('${recipe.id}')" class="flex-grow py-2 rounded font-bold text-sm uppercase tracking-wider transition shadow-lg bg-cartel-gold text-black hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                                <i class="fa-solid fa-hammer mr-2"></i> CRAFT
+                            </button>
+                        </div>
                     </div>
                 `;
                 container.appendChild(card);
+                
+                // Trigger calculation immediately to set colors and estimation
+                setTimeout(() => calculateRecipeCost(recipe.id), 0);
             });
+        }
+
+        // NEW: Function to set MAX input
+        window.setMaxCraft = function(recipeId, max) {
+            const input = document.getElementById(`qty-${recipeId}`);
+            if(input) {
+                input.value = max > 0 ? max : 1;
+                calculateRecipeCost(recipeId);
+            }
+        }
+
+        // NEW: Function to calculate live costs & output estimation
+        window.calculateRecipeCost = function(recipeId) {
+            const input = document.getElementById(`qty-${recipeId}`);
+            const btn = document.getElementById(`btn-craft-${recipeId}`);
+            const estEl = document.getElementById(`est-out-${recipeId}`);
+            const card = input.closest('.bg-cartel-panel'); // Find parent card
+            
+            let qty = parseInt(input.value);
+            if(isNaN(qty) || qty < 1) qty = 0;
+
+            // Calculate Output Estimation
+            const outputQty = parseInt(input.getAttribute('data-output-qty')) || 1;
+            const totalEst = qty * outputQty;
+            if(estEl) estEl.innerText = totalEst;
+
+            let isValid = true;
+
+            // Iterate through hidden data elements to update display
+            card.querySelectorAll('.ing-req-base').forEach(el => {
+                const base = parseInt(el.dataset.base);
+                const stock = parseInt(el.dataset.stock);
+                const targetId = el.dataset.target;
+                const targetEl = document.getElementById(targetId);
+
+                const totalReq = base * qty;
+                const isEnough = stock >= totalReq;
+
+                if (!isEnough) isValid = false;
+
+                targetEl.innerHTML = `Butuh: <span class="${isEnough ? 'text-gray-300' : 'text-red-500 font-bold'}">${totalReq}</span> <span class="text-gray-600">/</span> Stok: <span class="${isEnough ? 'text-green-500' : 'text-red-500'}">${stock}</span>`;
+            });
+
+            // Disable button if stock not enough or qty is 0
+            if(btn) {
+                btn.disabled = !isValid || qty === 0;
+                if(!isValid) {
+                    btn.classList.add('bg-red-900', 'text-gray-400');
+                    btn.classList.remove('bg-cartel-gold', 'text-black');
+                    btn.innerHTML = '<i class="fa-solid fa-ban mr-2"></i> BAHAN KURANG';
+                } else {
+                    btn.classList.remove('bg-red-900', 'text-gray-400');
+                    btn.classList.add('bg-cartel-gold', 'text-black');
+                    btn.innerHTML = '<i class="fa-solid fa-hammer mr-2"></i> CRAFT';
+                }
+            }
         }
 
         window.processCraft = function(recipeId) {
@@ -359,11 +471,13 @@
             showModal({ type: 'confirm', title: 'Konfirmasi Crafting', message: `Craft ${craftMultiplier}x ${recipe.name}?`, useInput: true, onConfirm: async(picValue) => {
                 const batch = writeBatch(db);
                 let ingredientsSnapshot = [];
+                
+                // Double check stock inside transaction/batch prep
                 for (const ing of recipe.ingredients) {
                     const itemKey = ing.name.toLowerCase();
                     const stockItem = inventoryCache[itemKey];
                     const req = ing.qty * craftMultiplier;
-                    if (!stockItem || stockItem.qty < req) return showModal({type:'error', title:'Gagal', message:`Stok ${ing.name} kurang.`});
+                    if (!stockItem || stockItem.qty < req) return showModal({type:'error', title:'Gagal', message:`Stok ${ing.name} kurang saat diproses.`});
                     
                     const newStock = stockItem.qty - req;
                     batch.update(doc(db, "items", stockItem.id), { qty: newStock });
@@ -385,8 +499,16 @@
                 }
                 
                 batch.set(doc(collection(db, "logs")), {name: recipe.outputName.toUpperCase(), prev: prevStock, change: `+${outputTotal}`, after: afterStock, type:"CRAFTING", pic:picValue, ingredientsSnapshot, timestamp: serverTimestamp()});
-                await batch.commit();
-                showModal({type:'success', title:'Sukses', message:'Crafting berhasil.'});
+                
+                try {
+                    await batch.commit();
+                    showModal({type:'success', title:'Sukses', message:'Crafting berhasil.'});
+                    // Reset input to 1 after success
+                    craftQtyInput.value = 1;
+                    calculateRecipeCost(recipeId);
+                } catch(e) {
+                    showModal({type:'error', title:'Gagal', message:e.message});
+                }
             }});
         };
 
@@ -541,7 +663,31 @@
         document.getElementById('btnOpenRecipeForm').onclick = () => { recipeFormContainer.classList.remove('hidden'); ingredientsListContainer.innerHTML=''; addIngredientRow(); };
         document.getElementById('btnCloseRecipeForm').onclick = () => recipeFormContainer.classList.add('hidden');
         document.getElementById('btnAddIngredient').onclick = () => addIngredientRow();
-        document.getElementById('recipeForm').onsubmit = async (e) => { e.preventDefault(); /* ... same as previous ... */ const name = document.getElementById('recipeName').value.trim().toUpperCase(); const outName = document.getElementById('recOutName').value.trim().toUpperCase(); const outQty = parseInt(document.getElementById('recOutQty').value); let ingredients = []; document.querySelectorAll('.ingredient-row').forEach(row => { const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase(); const iQty = parseInt(row.querySelector('.rec-ing-qty').value); if(iName && iQty>0) ingredients.push({name:iName, qty:iQty}); }); if(!name || !outName || ingredients.length===0) return showModal({type:'error', title:'Error', message:'Data resep kurang.'}); const id = document.getElementById('recipeId').value; const data = {name, outputName:outName, outputQty:outQty, ingredients, updated_at: serverTimestamp()}; try { if(id) await updateDoc(doc(db,"recipes",id), data); else await addDoc(collection(db,"recipes"),data); recipeFormContainer.classList.add('hidden'); showModal({type:'success', title:'Sukses', message:'Resep disimpan.'}); } catch(e){showModal({type:'error', title:'Gagal', message:e.message});} };
+        document.getElementById('recipeForm').onsubmit = async (e) => { 
+    e.preventDefault(); 
+    const name = document.getElementById('recipeName').value.trim().toUpperCase(); 
+    const outName = document.getElementById('recOutName').value.trim().toUpperCase(); 
+    const outQty = parseInt(document.getElementById('recOutQty').value); 
+    let ingredients = []; 
+    document.querySelectorAll('.ingredient-row').forEach(row => { 
+        const iName = row.querySelector('.rec-ing-name').value.trim().toUpperCase(); 
+        const iQty = parseInt(row.querySelector('.rec-ing-qty').value); 
+        if(iName && iQty>0) ingredients.push({name:iName, qty:iQty}); 
+    }); 
+            if(!name || !outName || ingredients.length===0) return showModal({type:'error', title:'Error', message:'Data resep kurang.'}); 
+            const id = document.getElementById('recipeId').value; 
+            const data = {name, outputName:outName, outputQty:outQty, ingredients, updated_at: serverTimestamp()}; 
+            try { 
+                if(id) await updateDoc(doc(db,"recipes",id), data); 
+                else await addDoc(collection(db,"recipes"),data); 
+                recipeFormContainer.classList.add('hidden');
+                document.getElementById('recipeId').value = '';
+                document.getElementById('recipeForm').reset();
+                showModal({type:'success', title:'Sukses', message:'Resep disimpan.'}); 
+            } catch(e){
+                showModal({type:'error', title:'Gagal', message:e.message});
+            } 
+        };
         window.deleteRecipe = (id) => { showModal({type:'delete', title:'Hapus?', message:'Hapus resep ini?', useInput:false, onConfirm: async() => { await deleteDoc(doc(db,"recipes",id)); showModal({type:'success', title:'Dihapus', message:'Resep dihapus.'}); }}); };
         window.editRecipe = (id) => { const r = recipes.find(x=>x.id===id); if(!r)return; document.getElementById('recipeId').value=id; document.getElementById('recipeName').value=r.name; document.getElementById('recOutName').value=r.outputName; document.getElementById('recOutQty').value=r.outputQty; ingredientsListContainer.innerHTML=''; r.ingredients.forEach(i=>addIngredientRow(i.name, i.qty)); recipeFormContainer.classList.remove('hidden'); };
 
@@ -1012,4 +1158,3 @@
 
 </body>
 </html>
-
