@@ -658,6 +658,111 @@
             });
         }
 
+        // ⬇️ TAMBAHKAN FUNGSI BARU INI ⬇️
+            window.confiscateCrafting = function(logId, itemName, craftedQty) {
+    if (!currentUser) return showModal({ type: 'error', title: 'Offline', message: "Sistem offline." });
+    
+    // ✅ FIX: Hitung jumlah yang benar-benar di-craft (bukan total after)
+    // Kita perlu mengambil log asli untuk mendapatkan info yang akurat
+    getDoc(doc(db, "logs", logId)).then(logSnap => {
+        if (!logSnap.exists()) {
+            return showModal({ type: 'error', title: 'Gagal', message: 'Log tidak ditemukan.' });
+        }
+        
+        const logData = logSnap.data();
+        
+        // ✅ Cek apakah sudah pernah disita
+        if (logData.confiscated) {
+            return showModal({ 
+                type: 'error', 
+                title: 'Sudah Disita', 
+                message: 'Hasil crafting ini sudah pernah disita sebelumnya.' 
+            });
+        }
+        
+        // ✅ Parse jumlah yang di-craft dari field 'change'
+        // Format change biasanya: "+10" atau "+50"
+        let actualCraftedQty = 0;
+        if (logData.change && logData.change.startsWith('+')) {
+            actualCraftedQty = parseInt(logData.change.replace('+', ''));
+        } else {
+            // Fallback jika format berbeda
+            actualCraftedQty = parseInt(craftedQty);
+        }
+        
+        showModal({
+            type: 'delete',
+            title: 'Sita Hasil Crafting?',
+            message: `Menyita ${actualCraftedQty}x ${itemName} dari proses crafting ini. Item akan dihapus dari inventory. Lanjutkan?`,
+            useInput: true,
+            onConfirm: async (pic) => {
+                try {
+                    const batch = writeBatch(db);
+                    
+                    // 1. Cari item di inventory
+                    const itemKey = itemName.toLowerCase();
+                    const stockItem = inventoryCache[itemKey];
+                    
+                    if (!stockItem) {
+                        return showModal({ 
+                            type: 'error', 
+                            title: 'Gagal', 
+                            message: `Item ${itemName} tidak ditemukan di inventory.` 
+                        });
+                    }
+                    
+                    // 2. Cek apakah stok cukup untuk disita
+                    if (stockItem.qty < actualCraftedQty) {
+                        return showModal({ 
+                            type: 'error', 
+                            title: 'Stok Kurang', 
+                            message: `Stok ${itemName} saat ini: ${stockItem.qty}, tidak cukup untuk menyita ${actualCraftedQty} unit.` 
+                        });
+                    }
+                    
+                    // 3. Kurangi stok HANYA sejumlah yang di-craft
+                    const newStock = stockItem.qty - actualCraftedQty;
+                    batch.update(doc(db, "items", stockItem.id), { qty: newStock });
+                    
+                    // 4. Tambahkan log penyitaan
+                    batch.set(doc(collection(db, "logs")), {
+                        name: itemName,
+                        prev: stockItem.qty,
+                        change: `DISITA -${actualCraftedQty}`,
+                        after: newStock,
+                        type: "CONFISCATED",
+                        pic: pic,
+                        note: `Penyitaan hasil crafting (${actualCraftedQty} unit)`,
+                        timestamp: serverTimestamp(),
+                        relatedLogId: logId
+                    });
+                    
+                    // 5. Update log crafting asli dengan status CONFISCATED
+                    batch.update(doc(db, "logs", logId), { 
+                        confiscated: true,
+                        confiscatedBy: pic,
+                        confiscatedAt: serverTimestamp(),
+                        confiscatedQty: actualCraftedQty
+                    });
+                    
+                    await batch.commit();
+                    
+                    showModal({ 
+                        type: 'success', 
+                        title: 'Berhasil Disita', 
+                        message: `${actualCraftedQty}x ${itemName} telah disita dan dihapus dari inventory.` 
+                    });
+                    
+                } catch (e) {
+                    showModal({ type: 'error', title: 'Gagal', message: e.message });
+                }
+            }
+        });
+    }).catch(e => {
+        showModal({ type: 'error', title: 'Error', message: e.message });
+    });
+}
+
         // --- 8. CRUD INVENTORY (SHARED) ---
         window.addIngredientRow = function(name='',qty=1) { ingredientsListContainer.insertAdjacentHTML('beforeend', `<div class="flex gap-2 mb-2 items-center ingredient-row"><input type="text" class="rec-ing-name w-full bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm uppercase" value="${name}"><input type="number" class="rec-ing-qty w-20 bg-black border border-gray-700 px-3 py-2 rounded text-white text-sm text-center" value="${qty}"><button type="button" onclick="this.parentElement.remove()" class="text-red-500"><i class="fa-solid fa-xmark"></i></button></div>`); };
         document.getElementById('btnOpenRecipeForm').onclick = () => { recipeFormContainer.classList.remove('hidden'); ingredientsListContainer.innerHTML=''; addIngredientRow(); };
@@ -787,24 +892,93 @@
                 changeColor = 'text-green-500';
             } else if (log.change === 'DELETED' || log.type === 'DELETED') {
                 changeColor = 'text-red-500';
+            } else if (log.change && log.change.includes('DISITA')) {
+                changeColor = 'text-orange-500';
             } else if (log.change && log.change.startsWith('-')) {
                 changeColor = 'text-red-500';
             }
             
-            const html = `<div class="fade-in mb-6 relative group"><div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full"><div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='SALE'?'bg-green-500':(log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':'bg-cartel-gold'))}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div><div class="p-5 relative z-10 bg-[#121212]"><div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div><div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2"><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono ${changeColor} font-bold text-lg">${log.change}</div></div><div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div></div><div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div>${log.note ? `<div class="text-xs text-gray-400 mt-2 italic border-t border-gray-700 pt-2"><i class="fa-solid fa-note-sticky mr-1"></i> ${log.note}</div>` : ''}</div><div class="h-1.5 w-full ${log.type==='SALE'?'bg-green-900':(log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':'bg-cartel-gold'))}"></div></div></div>`;
+            const html = `<div class="fade-in mb-6 relative group">
+                <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-cartel-border shadow-2xl w-full"><div class="bg-gradient-to-r from-cartel-panel to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full ${log.type==='SALE'?'bg-green-500':(log.type==='DELETED'?'bg-red-600':(log.type==='CRAFTING'?'bg-blue-500':(log.type==='CONFISCATED'?'bg-orange-500':'bg-cartel-gold')))}"></div><span class="text-xs font-bold text-gray-400 tracking-wider">${log.type || 'LOG'}</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div><div class="p-5 relative z-10 bg-[#121212]"><div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold text-white">${log.name}</h3>${log.type==='DELETED'?'<span class="text-xs text-red-500 border border-red-900 px-2 rounded">DESTROYED</span>':''}</div><div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2"><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono ${changeColor} font-bold text-lg">${log.change}</div></div><div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold text-lg">${log.after}</div></div></div><div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-cartel-gold uppercase">${log.pic||'Unknown'}</span></div>${log.note ? `<div class="text-xs text-gray-400 mt-2 italic border-t border-gray-700 pt-2"><i class="fa-solid fa-note-sticky mr-1"></i> ${log.note}</div>` : ''}</div><div class="h-1.5 w-full ${log.type==='SALE'?'bg-green-900':(log.type==='DELETED'?'bg-red-900':(log.type==='CRAFTING'?'bg-blue-900':(log.type==='CONFISCATED'?'bg-orange-900':'bg-cartel-gold')))}"></div></div></div>`;
             container.insertAdjacentHTML('beforeend', html);
         }
+        
+
         function renderCraftingLogCard(id, log, container) {
-            const uniqueLogId = `craft-log-${id}`;
-            let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
-            let ingredientsHTML = '';
-            if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
-                let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} -> ${ing.after}</td></tr>`).join('');
-                ingredientsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-            }
-            const html = `<div class="fade-in mb-4 relative group"><div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1"><button onclick="deleteLog('${id}')" class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow hover:bg-red-700 flex items-center gap-1"><i class="fa-solid fa-trash"></i></button><button onclick="captureReport('${uniqueLogId}')" class="bg-white text-black text-xs font-bold px-3 py-1 rounded shadow hover:bg-gray-200 flex items-center gap-1"><i class="fa-solid fa-camera"></i> IMG</button></div><div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full"><div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800"><div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500"></div><span class="text-xs font-bold text-gray-400 tracking-wider">CRAFTING</span></div><span class="text-[10px] text-gray-600 font-mono">${dateStr}</span></div><div class="p-4 relative z-10 bg-[#121212]"><h3 class="text-lg font-bold text-white mb-3">${log.name}</h3><div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2"><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AWAL</div><div class="font-mono text-gray-400 font-bold">${log.prev}</div></div><div class="p-2 text-center border-r border-gray-800"><div class="text-[9px] text-gray-500">AKSI</div><div class="font-mono text-green-500 font-bold">${log.change}</div></div><div class="p-2 text-center"><div class="text-[9px] text-gray-500">AKHIR</div><div class="font-mono text-white font-bold">${log.after}</div></div></div>${ingredientsHTML}<div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2"><span class="text-[10px] text-gray-500">PIC:</span><span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span></div>${log.note ? `<div class="text-xs text-gray-400 mt-2 italic border-t border-gray-700 pt-2"><i class="fa-solid fa-note-sticky mr-1"></i> ${log.note}</div>` : ''}</div><div class="h-1.5 w-full bg-blue-900"></div></div></div>`;
-            container.insertAdjacentHTML('beforeend', html);
-        }
+    const uniqueLogId = `craft-log-${id}`;
+    let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
+    let ingredientsHTML = '';
+    if (log.ingredientsSnapshot && log.ingredientsSnapshot.length > 0) {
+        let rows = log.ingredientsSnapshot.map(ing => `<tr class="border-b border-gray-800 last:border-0 text-[10px]"><td class="py-1 text-gray-400">${ing.name}</td><td class="py-1 text-center text-red-400 font-mono">-${ing.used}</td><td class="py-1 text-right text-gray-500 font-mono">${ing.before} -> ${ing.after}</td></tr>`).join('');
+        ingredientsHTML = `<div class="mt-3 bg-black/40 rounded p-2 border border-gray-800"><table class="w-full"><thead><tr class="text-[9px] text-gray-600 border-b border-gray-700"><th class="text-left pb-1">BAHAN</th><th class="text-center pb-1">PAKAI</th><th class="text-right pb-1">STOCK LOG</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+    const html = `<div class="fade-in mb-4 relative group">
+        <div class="absolute -top-3 right-0 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+            <button onclick="confiscateCrafting('${id}', '${log.name}', ${log.after})" 
+                    class="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded shadow hover:bg-orange-700 flex items-center gap-1 ${log.confiscated ? 'opacity-50 cursor-not-allowed' : ''}"
+                    ${log.confiscated ? 'disabled' : ''}>
+                <i class="fa-solid fa-hand-holding"></i> ${log.confiscated ? 'DISITA' : 'SITA'}
+            </button>
+            <button onclick="deleteLog('${id}')" class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow hover:bg-red-700 flex items-center gap-1">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+        <div id="${uniqueLogId}" class="bg-[#121212] rounded-lg overflow-hidden border border-blue-900/50 shadow-2xl w-full">
+            <div class="bg-gradient-to-r from-blue-900/50 to-black p-3 flex justify-between items-center border-b border-gray-800">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full ${log.confiscated ? 'bg-orange-500' : 'bg-blue-500'}"></div>
+                    <span class="text-xs font-bold text-gray-400 tracking-wider">
+                        CRAFTING ${log.confiscated ? '<span class="text-orange-500 ml-2">[DISITA]</span>' : ''}
+                    </span>
+                </div>
+                <span class="text-[10px] text-gray-600 font-mono">${dateStr}</span>
+            </div>
+            <div class="p-4 relative z-10 bg-[#121212]">
+                <h3 class="text-lg font-bold text-white mb-3">${log.name}</h3>
+                <div class="grid grid-cols-3 gap-0 border border-gray-800 rounded bg-[#0a0a0a] mb-2">
+                    <div class="p-2 text-center border-r border-gray-800">
+                        <div class="text-[9px] text-gray-500">AWAL</div>
+                        <div class="font-mono text-gray-400 font-bold">${log.prev}</div>
+                    </div>
+                    <div class="p-2 text-center border-r border-gray-800">
+                        <div class="text-[9px] text-gray-500">AKSI</div>
+                        <div class="font-mono text-green-500 font-bold">${log.change}</div>
+                    </div>
+                    <div class="p-2 text-center">
+                        <div class="text-[9px] text-gray-500">AKHIR</div>
+                        <div class="font-mono text-white font-bold">${log.after}</div>
+                    </div>
+                </div>
+                ${ingredientsHTML}
+                <div class="flex justify-between items-center border-t border-gray-800 pt-2 mt-2">
+                    <span class="text-[10px] text-gray-500">PIC:</span>
+                    <span class="text-xs font-bold text-blue-400 uppercase">${log.pic || 'Unknown'}</span>
+                </div>
+                ${log.confiscated ? `
+                    <div class="mt-2 bg-orange-900/30 border border-orange-800 rounded p-2">
+                        <div class="flex items-center gap-2 text-xs text-orange-400">
+                            <i class="fa-solid fa-hand-holding"></i>
+                            <span class="font-bold">HASIL TELAH DISITA</span>
+                        </div>
+                        <div class="text-[10px] text-gray-500 mt-1">
+                            Oleh: <span class="text-orange-300">${log.confiscatedBy || 'Unknown'}</span>
+                        </div>
+                    </div>
+                ` : ''}
+                ${log.note ? `<div class="text-xs text-gray-400 mt-2 italic border-t border-gray-700 pt-2"><i class="fa-solid fa-note-sticky mr-1"></i> ${log.note}</div>` : ''}
+            </div>
+            <div class="h-1.5 w-full bg-blue-900"></div>
+        </div>
+    </div>`;
+    container.insertAdjacentHTML('beforeend', html);
+}
+
+
+
+
+
+
+
         function renderSalesLogCard(id, log, container) {
             const uniqueLogId = `sale-log-${id}`;
             let dateStr = log.timestamp ? log.timestamp.toDate().toLocaleString('id-ID') : "...";
@@ -1161,4 +1335,5 @@
 
 </body>
 </html>
+
 
